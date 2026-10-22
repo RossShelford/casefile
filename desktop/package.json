@@ -1,0 +1,66 @@
+{
+  "name": "casefile",
+  "productName": "casefile",
+  "version": "0.1.0",
+  "description": "Choose a folder of documents and get back what happened, most important first. Runs entirely on your computer.",
+  "main": "main.js",
+  "private": true,
+  "license": "Apache-2.0",
+  "author": "Ross Shelford",
+  "homepage": "https://github.com/RossShelford/casefile",
+  "repository": "github:RossShelford/casefile",
+  "scripts": {
+    "start": "electron .",
+    "build:engine": "node scripts/build-engine.mjs",
+    "dist": "npm run build:engine && electron-builder --publish never"
+  },
+  "build": {
+    "appId": "org.casefile.desktop",
+    "productName": "casefile",
+    "files": [
+      "main.js",
+      "preload.js",
+      "starting.html",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../dist/casefile-engine",
+        "to": "engine"
+      }
+    ],
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "mac": {
+      "target": [
+        "dmg"
+      ],
+      "category": "public.app-category.productivity",
+      "icon": "build/icon.png",
+      "identity": null
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "icon": "build/icon.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "category": "Office",
+      "icon": "build/icon.png"
+    }
+  },
+  "devDependencies": {
+    "electron": "^45.0.0",
+    "electron-builder": "^26.15.3"
+  }
+}

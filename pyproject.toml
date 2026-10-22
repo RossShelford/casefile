@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "casefile"
+version = "0.1.0"
+description = "Turn a folder of long, messy documents into a prioritised, easy-to-read log of events, using a local AI model."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+authors = [{ name = "Ross Shelford" }]
+dependencies = [
+    "pypdf>=4.0",
+    "reportlab>=4.0",
+    "svglib>=1.5",
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
+    "python-multipart>=0.0.9",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8", "httpx>=0.27"]
+
+[project.scripts]
+casefile = "casefile.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/RossShelford/casefile"
+Issues = "https://github.com/RossShelford/casefile/issues"
+
+[tool.setuptools]
+packages = ["casefile"]
+
+[tool.setuptools.package-data]
+casefile = ["assets/fonts/*", "assets/icons/*", "web/*"]

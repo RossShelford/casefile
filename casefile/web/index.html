@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>casefile</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <header class="bar">
+    <a class="wordmark" href="#/">casefile</a>
+    <p class="model" id="model" role="status"></p>
+  </header>
+  <main id="app" tabindex="-1"></main>
+  <input type="file" id="picker" webkitdirectory multiple hidden>
+  <script src="/static/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,11 @@
+casefile
+Copyright 2026 Ross Shelford
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+It bundles the following third-party work, each under its own licence:
+
+- Lucide icons (casefile/assets/icons), ISC License, Copyright (c) Lucide Contributors.
+  See casefile/assets/icons/LICENSE.
+- Atkinson Hyperlegible typeface (casefile/assets/fonts), SIL Open Font License 1.1,
+  Copyright 2020 Braille Institute of America, Inc. See casefile/assets/fonts/OFL.txt.

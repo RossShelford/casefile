@@ -6,6 +6,7 @@ import email.message
 import email.policy
 import io
 import mailbox
+import os
 import shutil
 import struct
 import subprocess
@@ -109,12 +110,14 @@ def test_scanned_pdf_without_tesseract_says_how_to_fix(tmp_path, monkeypatch):
 
 
 def test_tesseract_found_outside_path(monkeypatch, tmp_path):
-    exe = tmp_path / "tesseract"
+    exe = tmp_path / ("tesseract.exe" if os.name == "nt" else "tesseract")
     exe.write_text("#!/bin/sh\n")
     exe.chmod(0o755)
     monkeypatch.setenv("PATH", "")
     monkeypatch.setattr(ingest, "_BIN_DIRS", (str(tmp_path),))
-    assert ingest._tesseract() == str(exe)
+    found = ingest._tesseract()
+    # Windows reports the extension as listed in PATHEXT (".EXE"); its file names ignore case.
+    assert found is not None and os.path.normcase(found) == os.path.normcase(str(exe))
 
 
 @pytest.mark.skipif(ingest._tesseract() is None, reason="tesseract is not installed")

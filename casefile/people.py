@@ -20,7 +20,17 @@ TITLES = {
     "rev", "fr", "judge", "justice", "hon", "officer", "det", "detective", "sgt", "sergeant",
     "capt", "captain", "lt", "col", "gen", "agent", "insp", "inspector", "cllr", "councillor",
 }
-SUFFIXES = {"jr", "sr", "ii", "iii", "iv", "phd", "md", "esq", "qc", "kc", "cpa"}
+# Generational suffixes and post-nominal letters: "Martin Greaves MRICS" is Martin Greaves.
+SUFFIXES = {
+    "jr", "sr", "ii", "iii", "iv", "phd", "md", "esq", "qc", "kc", "cpa",
+    "mrics", "frics", "aincs", "llb", "llm", "mba", "msc", "bsc", "meng", "beng", "ceng",
+    "fca", "aca", "acca", "fcca", "cfa", "mbe", "obe", "cbe", "jp", "mp", "rgn", "rn", "dphil",
+}
+# Words that mark an organisation, not a person: "Hollis & Sons Building Ltd", "Acme PLC".
+ORGANISATION_WORDS = {
+    "ltd", "limited", "llc", "llp", "inc", "plc", "corp", "corporation", "gmbh", "company",
+    "sons", "group", "council", "department", "agency", "lettings", "services", "solutions",
+}
 # Lower-case words that end a name: "Sarah at Northgate" is Sarah, not Sarah Northgate.
 # Particles such as "van", "de", "bin" are not listed: they belong to real surnames.
 DESCRIPTIVE_WORDS = {"at", "from", "of", "the", "and", "in", "with", "for", "to", "on", "who"}
@@ -70,10 +80,16 @@ def parse_name(raw: str) -> Name | None:
     raw = raw.strip()
     if not raw or "@" in raw:
         return None
-    if raw.count(",") == 1:
-        a, b = (x.strip() for x in raw.split(","))
-        if a and b and " " not in a and b.lower().strip(". ") not in SUFFIXES:
-            raw = f"{b} {a}"  # "Kim, Sarah" -> "Sarah Kim"
+    if "," in raw:
+        a, _, b = (x.strip() for x in raw.partition(","))
+        suffixes_only = all(t.lower().strip(". ") in SUFFIXES for t in re.split(r"[\s,]+", b) if t)
+        if a and b and not suffixes_only:
+            if " " in a:
+                raw = a  # "Sarah Kim, CFO": what follows the name is a role, not a surname
+            elif raw.count(",") == 1:
+                raw = f"{b} {a}"  # "Kim, Sarah" -> "Sarah Kim"
+    if "&" in raw or any(t.strip(".,()").casefold() in ORGANISATION_WORDS for t in raw.split()):
+        return None  # an organisation the model listed as a person
     tokens = re.split(r"[\s,]+", raw)
     # "Bob's agent", "the landlord's son": a description of someone, not their name.
     if any(re.search(r"['’]s$", t) for t in tokens):
@@ -90,7 +106,8 @@ def parse_name(raw: str) -> Name | None:
         tok = tokens.pop(0)
         if not title:
             title = tok.capitalize() + ("." if tok.lower() in ABBREVIATED_TITLES else "")
-    while tokens and tokens[-1].lower() in SUFFIXES:
+    # Only while a first name and surname would remain: "Yo-Yo Ma" keeps its surname.
+    while len(tokens) > 2 and tokens[-1].lower() in SUFFIXES:
         tokens.pop()
     if not tokens:
         return None
@@ -103,6 +120,49 @@ def parse_name(raw: str) -> Name | None:
 def _first_compatible(a: str, b: str) -> bool:
     a, b = a.casefold(), b.casefold()
     return a == b or b in NICKNAMES.get(a, ()) or a in NICKNAMES.get(b, ())
+
+
+def _short_form(short: str, full: str) -> bool:
+    """'Jas' for 'Jaswinder', 'Pri' for 'Priya': a clipped first name of at least 3 letters."""
+    short, full = short.casefold(), full.casefold()
+    return len(short) >= 3 and len(full) > len(short) and full.startswith(short)
+
+
+_INITIALS = re.compile(r"(?:[^\W\d_]\.?\s*){1,3}")
+
+
+def _initials(raw: str) -> str:
+    """'S', 'G.', 'TP', 'S.K.' -> 'S', 'G', 'TP', 'SK'; '' for anything else.
+
+    Two or three letters only count as initials when written in capitals or with dots,
+    so real short names such as "Jo", "Al" and "Ed" stay names."""
+    raw = raw.strip()
+    if not _INITIALS.fullmatch(raw):
+        return ""
+    letters = "".join(c for c in raw if c.isalpha())
+    return letters.upper() if len(letters) == 1 or "." in raw or letters.isupper() else ""
+
+
+def _initials_fit(letters: str, key: tuple) -> bool:
+    """Do the initials fit this name key? 'S' -> Sarah; 'SK' -> Sarah Kim; 'SJK' -> Sarah (J.) Kim."""
+    letters = letters.casefold()
+    first = key[1] if key[0] in ("F", "I", "1") else ""
+    last = key[2] if key[0] in ("F", "I") else ""
+    if not first.startswith(letters[0]):
+        return False
+    return len(letters) == 1 or (last.startswith(letters[-1]) if last else False)
+
+
+MAX_ROLE = 60
+
+
+def _short_role(role: str) -> str:
+    """Roles are labels ("landlord", "Acme CFO"), not paragraphs; cut long ones at a word."""
+    role = " ".join(role.split())
+    if len(role) <= MAX_ROLE:
+        return role
+    cut = role[: MAX_ROLE - 1]
+    return (cut[: cut.rindex(" ")] if " " in cut else cut).rstrip() + "…"
 
 
 @dataclass
@@ -161,6 +221,8 @@ class Cast:
         # Per-chunk aliases: "Sarah" / "Mr. Kim" / an email only mean Sarah Kim *in that chunk*.
         self._local: dict[object, dict[str, tuple]] = defaultdict(dict)  # casefolded alias -> key
         self._local_forms: dict[object, set[str]] = defaultdict(set)  # aliases as written
+        # Records that were only initials ("S"): (chunk_id, raw, letters, seen), placed in finalize().
+        self._initials_seen: list[tuple] = []
         self._people: dict[tuple, Person] = {}  # root key -> Person, after finalize()
         self._relabel_cache: dict[object, tuple] = {}
 
@@ -169,14 +231,35 @@ class Cast:
     def add_person(self, chunk_id, full_name: str, aliases: list[str], role: str, seen: tuple) -> None:
         names = [(raw, parse_name(raw)) for raw in [full_name, *aliases]]
         parsed = [(raw, n) for raw, n in names if n]
+        surnames = {n.last.casefold() for _, n in parsed if n.last}
+        # "Dr. Patel" with the alias "Patel": the bare word is the surname again, not a first
+        # name. Keep it as a local alias only, so it never makes "Patel Patel".
+        bare_surnames = {raw for raw, n in parsed if n.key[0] == "1" and n.first.casefold() in surnames}
+        # "S", "G.", "TP": initials are not first names. With another name in the record they
+        # are just an alias; alone they are matched to a person once everyone is known.
+        initials = {raw: _initials(raw) for raw, _ in names if _initials(raw)}
+        parsed = [(raw, n) for raw, n in parsed if raw not in bare_surnames and raw not in initials]
         full = [(raw, n) for raw, n in parsed if n.key[0] == "F"]
-        if not full:
+        if full:
+            # One record can only merge full names that could be the same person: same surname
+            # (Robert Smith / Bob Smith) or same first name (a married name). Otherwise a single
+            # bad or planted record ("Alice Brown", aka "Carol Davis") would merge two real
+            # people across every document; the unrelated name is ignored instead.
+            main = full[0][1]
+            rejected = {
+                raw for raw, n in full[1:]
+                if n.last.casefold() != main.last.casefold() and not _first_compatible(n.first, main.first)
+            }
+            full = [(raw, n) for raw, n in full if raw not in rejected]
+            names = [(raw, n) for raw, n in names if raw not in rejected]
+        else:
             # "Sarah" + "Dr. Kim" in one record is enough to infer Sarah Kim.
             firsts = [n for _, n in parsed if n.key[0] == "1"]
             lasts = [n for _, n in parsed if n.key[0] == "L"]
             if len(firsts) == 1 and len(lasts) == 1:
                 inferred = Name(firsts[0].first, lasts[0].last, lasts[0].title)
                 full = [(f"{inferred.first} {inferred.last}", inferred)]
+        role = _short_role(role)
         if full:
             anchor = full[0][1].key
             for raw, n in full:
@@ -191,9 +274,13 @@ class Cast:
             for raw, n in parsed:
                 self._register(n, raw, chunk_id, seen)
                 self._uf.union(anchor, n.key)
+            for raw, _ in names:
                 self._add_local(chunk_id, raw, anchor)
             if role:
                 self._roles[anchor][role] += 1
+        else:
+            for raw, letters in initials.items():
+                self._initials_seen.append((chunk_id, raw, letters, seen))
 
     def _add_local(self, chunk_id, raw: str, key: tuple) -> None:
         if raw.casefold() not in self._local[chunk_id]:
@@ -202,8 +289,19 @@ class Cast:
 
     def add_actor(self, chunk_id, name: str, seen: tuple) -> None:
         """Event actors the model forgot to list under people still count as people."""
-        if name.casefold() not in self._local[chunk_id]:
-            self.add_person(chunk_id, name, [], "", seen)
+        if name.casefold() in self._local[chunk_id]:
+            return
+        n = parse_name(name)
+        if n is not None and n.key[0] == "1" and not _initials(name):
+            # "Sarah" as an actor in a part that lists Sarah Kim (and no other Sarah) is her;
+            # so is "Jas" in a part that lists Jaswinder Sandhu.
+            listed = [k for k in self._local[chunk_id].values() if k[0] == "F"]
+            fits = {k for k in listed if _first_compatible(n.first, k[1])}
+            fits = fits or {k for k in listed if _short_form(n.first, k[1])}
+            if len(fits) == 1:
+                self._add_local(chunk_id, name, fits.pop())
+                return
+        self.add_person(chunk_id, name, [], "", seen)
 
     def _register(self, n: Name, raw: str, chunk_id, seen: tuple) -> None:
         self._uf.add(n.key)
@@ -220,15 +318,25 @@ class Cast:
         keys = list(self._uf.parent)
         full_keys = [k for k in keys if k[0] == "F"]
 
-        # Nicknames: "Bob Smith" joins "Robert Smith" if he is the only compatible Smith.
+        # Variants of one first name with the same surname are one person, if only one fits:
+        # "Bob Smith" joins "Robert Smith" (nickname), "P. Doyle" joins Patrick Doyle (initial),
+        # "Jas Sandhu" joins Jaswinder Sandhu (clipped name).
         by_last: dict[str, list[tuple]] = defaultdict(list)
         for k in full_keys:
             by_last[k[2]].append(k)
         for k in full_keys:
-            if k[1] in NICKNAMES:
-                cands = {self._uf.find(o) for o in by_last[k[2]] if o != k and _first_compatible(k[1], o[1])}
-                if len(cands) == 1:
-                    self._uf.union(cands.pop(), k)
+            # Start only from the short side (nickname, initial, clipped name). Starting from
+            # "Christopher" would pull in "Chris", and then "Christina" would join through him.
+            cands = {
+                self._uf.find(o) for o in by_last[k[2]]
+                if o != k and (
+                    (k[1] in NICKNAMES and _first_compatible(k[1], o[1]))
+                    or (len(k[1]) == 1 < len(o[1]) and o[1].startswith(k[1]))
+                    or _short_form(k[1], o[1])
+                )
+            }
+            if len(cands) == 1:
+                self._uf.union(cands.pop(), k)
 
         # Partial names join a full name only when exactly one person fits.
         roots = {self._uf.find(k) for k in full_keys}
@@ -241,6 +349,8 @@ class Cast:
                 continue
             if k[0] == "1":
                 fits = {r for r in roots if any(_first_compatible(k[1], m[1]) for m in members[r])}
+                # A clipped form ("Jas") only when no full first name or nickname fits.
+                fits = fits or {r for r in roots if any(_short_form(k[1], m[1]) for m in members[r])}
             elif k[0] == "L":
                 fits = {r for r in roots if any(m[2] == k[1] for m in members[r])}
             else:  # "I": Sarah K.
@@ -249,6 +359,24 @@ class Cast:
                 self._uf.union(fits.pop(), k)
             elif len(fits) > 1 and k[0] == "1":
                 ambiguous.add(k)
+
+        # Initials on their own: the one person they fit in that part, else the one person
+        # they fit anywhere. Unplaceable initials are dropped rather than becoming "S".
+        everyone: dict[tuple, list[tuple]] = defaultdict(list)
+        for k in keys:
+            everyone[self._uf.find(k)].append(k)
+        for chunk_id, raw, letters, seen in self._initials_seen:
+            if raw.casefold() in self._local[chunk_id]:
+                continue
+            here = {self._uf.find(k) for k in self._local[chunk_id].values()}
+            fits = {r for r in here if any(_initials_fit(letters, m) for m in everyone[r])}
+            if not fits:
+                fits = {r for r in everyone if any(_initials_fit(letters, m) for m in everyone[r])}
+            if len(fits) == 1:
+                root = fits.pop()
+                self._add_local(chunk_id, raw, root)
+                self._chunks_seen[root].add(chunk_id)
+                self._first_seen[root] = min(self._first_seen[root], seen)
 
         groups: dict[tuple, list[tuple]] = defaultdict(list)
         for k in keys:
@@ -280,6 +408,10 @@ class Cast:
                 if n.first and n.last:
                     fulls[" ".join(raw.split())] += count
             titles.update(self._titles[k])
+        # "S. Kim" next to "Sarah Kim": the initial is never preferred over the name it stands for.
+        if any(len(f) > 1 for f in firsts):
+            firsts = Counter({f: c for f, c in firsts.items() if len(f) > 1})
+            fulls = Counter({f: c for f, c in fulls.items() if len(parse_name(f).first) > 1})
         roles: Counter = Counter()
         for k in group:
             roles.update(self._roles[k])
@@ -337,6 +469,8 @@ def _most_common(counter: Counter) -> str:
 def _assign_labels(people: list[Person]) -> None:
     def label(p: Person, level: int) -> str:
         if p.first and p.last:
+            if len(p.first) == 1:  # "P. Doyle": a bare initial is never a label
+                return f"{p.first}. {p.last}"
             return p.first if level == 0 else f"{p.first} {p.last}"
         if p.first:
             return f"{p.first} (unclear)" if p.unresolved or level > 0 else p.first

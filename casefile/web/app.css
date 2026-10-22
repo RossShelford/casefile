@@ -20,6 +20,8 @@
   background: var(--paper);
 }
 * { box-sizing: border-box; }
+/* Anything marked hidden stays hidden, even when a rule gives it a display (e.g. "Show more"). */
+[hidden] { display: none !important; }
 body { margin: 0; }
 a { color: inherit; }
 button { font: inherit; color: inherit; }
@@ -62,6 +64,8 @@ main:focus, main:focus-visible { outline: none; } /* focus is moved here on each
 .past li { display: flex; gap: 1rem; align-items: baseline; padding: 0.6rem 0; border-top: 1px solid var(--rule); }
 .past li a { font-weight: 700; flex: 1; }
 .past .meta { color: var(--meta); font-size: 0.85rem; }
+.past li .linkish { flex: none; }
+.row-actions { display: flex; flex-wrap: wrap; gap: 0.75rem; margin: 1rem 0; }
 .past .howto { margin: 0; padding-left: 1.4rem; max-width: 36rem; }
 .past .howto li { display: list-item; padding: 0 0 0.75rem; border: 0; }
 .past .howto li::marker { font-weight: 700; }
@@ -110,21 +114,44 @@ main:focus, main:focus-visible { outline: none; } /* focus is moved here on each
 .month h2 { position: sticky; top: 0; background: var(--paper); margin: 0; padding: 0.9rem 0 0.4rem; z-index: 1; }
 .events { list-style: none; margin: 0; padding: 0; position: relative; }
 .events::before { content: ""; position: absolute; left: calc(var(--spine) / 2 - 1px); top: 0; bottom: 0; width: 2px; background: var(--rule); }
-.ev { position: relative; display: grid; grid-template-columns: var(--spine) 6.2rem minmax(0, 1fr); column-gap: 0.75rem;
+.ev { position: relative; display: grid; grid-template-columns: var(--spine) 6.6rem minmax(0, 1fr); column-gap: 0.75rem;
   padding: 0.55rem 0.5rem 0.55rem 0; border-radius: 6px; }
-.ev .mark { grid-row: 1 / span 2; justify-self: center; position: relative; z-index: 1; margin-top: 1px; }
-.ev time { color: var(--meta); font-size: 0.9rem; padding-top: 0.15rem; white-space: nowrap; }
+.ev .mark { grid-row: 1; justify-self: center; position: relative; z-index: 1; margin-top: 1px; }
+.ev .when { display: flex; flex-direction: column; align-items: flex-start; gap: 0.1rem; padding-top: 0.15rem; }
+.ev time { color: var(--meta); font-size: 0.9rem; white-space: nowrap; }
 .ev .what { margin: 0; }
 .ev.major { background: var(--major-tint); }
 .ev.major .what { color: var(--major); font-weight: 700; }
 .ev.notable .what { font-weight: 700; }
 .ev.minor .what, .ev.minor time { color: var(--minor); }
-.ev .src { grid-column: 3; display: flex; flex-wrap: wrap; gap: 0.25rem 1rem; align-items: baseline; font-size: 0.8rem; color: var(--meta); }
-.ev blockquote { grid-column: 3; margin: 0.35rem 0 0.2rem; padding-left: 0.8rem; border-left: 3px solid var(--rule); font-style: italic; color: var(--meta); font-size: 0.92rem; }
-.ev .tag { font-size: 0.75rem; font-weight: 700; border-radius: 4px; padding: 0 0.35em; }
-.ev.major .tag { background: var(--major); color: var(--paper); }
-.ev.notable .tag { background: var(--notable); color: var(--standard); }
+
+/* "Show source": small and grey, so the log reads as a list of what happened */
+.show-source { background: none; border: 0; padding: 0; font: inherit; font-size: 0.75rem; color: var(--minor);
+  cursor: pointer; text-align: left; }
+.show-source:hover, .show-source[aria-expanded="true"] { color: var(--meta); text-decoration: underline; }
+.ev .source { grid-column: 3; margin: 0.45rem 0 0.1rem; padding: 0.5rem 0.75rem; border-left: 3px solid var(--rule);
+  background: #F6F7F8; border-radius: 0 6px 6px 0; font-size: 0.85rem; color: var(--meta); min-width: 0; }
+.ev .source p { margin: 0; }
+/* Long paths are cut with "…" rather than wrapping; the full path is in the tooltip. */
+.source-file { display: flex; gap: 0.6rem; align-items: baseline; min-width: 0; }
+.source-file .file { color: var(--standard); font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.source-file .where { flex: none; }
+.source-folder { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.8rem; }
+.ev .source blockquote { margin: 0.4rem 0 0; font-style: italic; color: var(--meta); }
+.ev.major .source { background: var(--paper); }
 .empty { color: var(--meta); padding: 1rem 0; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+
+/* Long lists are shown a page at a time */
+.more { display: block; margin: 0.75rem 0 0.25rem calc(var(--spine) + 0.75rem); background: none; border: 1.5px solid var(--rule);
+  border-radius: 6px; padding: 0.35em 0.9em; font-size: 0.85rem; color: var(--standard); cursor: pointer; }
+.more:hover { border-color: var(--standard); }
+.people + .more, .sources + .more { margin-left: 0; }
+.search { width: 100%; font: inherit; font-size: 0.9rem; padding: 0.4em 0.6em; border: 1.5px solid var(--rule); border-radius: 6px; margin: 0 0 0.5rem; }
+.search:focus { border-color: var(--standard); outline: none; }
+.list-tools { display: flex; flex-wrap: wrap; gap: 0.5rem 1rem; align-items: center; margin: 0.6rem 0 0.25rem; }
+.list-tools .search { flex: 1 1 16rem; margin: 0; }
+.check { font-size: 0.85rem; color: var(--meta); }
 
 /* right column */
 .aside { position: sticky; top: 1rem; max-height: calc(100vh - 2rem); overflow: auto; }
@@ -142,7 +169,8 @@ main:focus, main:focus-visible { outline: none; } /* focus is moved here on each
 details { margin-top: 2rem; border-top: 1px solid var(--rule); padding-top: 0.75rem; }
 details summary { cursor: pointer; font-weight: 700; }
 .sources { list-style: none; padding: 0; margin: 0.5rem 0 0; font-size: 0.9rem; }
-.sources li { display: flex; justify-content: space-between; gap: 1rem; padding: 0.3rem 0; border-top: 1px solid var(--rule); }
-.sources .status { color: var(--meta); }
+.sources li { display: flex; justify-content: space-between; gap: 1rem; padding: 0.3rem 0; border-top: 1px solid var(--rule); min-width: 0; }
+.sources .path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.sources .status { color: var(--meta); flex: none; max-width: 50%; text-align: right; }
 
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }

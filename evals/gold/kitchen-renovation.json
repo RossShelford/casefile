@@ -1,0 +1,30 @@
+{
+  "description": "Homeowner vs builder over a defective kitchen fit-out, ending in a small claim. Formats: generated PDF quotation, Excel payments sheet, WhatsApp export with dd/mm/yyyy dates and emoji, HTML surveyor's report with a findings table, plain email, court confirmation text.",
+  "events": [
+    {"id": "K01", "date": "2023-04-28", "importance": "standard", "keywords": ["quot|q-2231", "18,600|kitchen|15,500"], "what": "builder quotes £18,600 for the kitchen"},
+    {"id": "K02", "date": "2023-05-02", "importance": "notable", "keywords": ["accept|sign", "quot|q-2231|contract"], "what": "Priya signs and accepts the quotation"},
+    {"id": "K03", "date": "2023-05-03", "importance": "notable", "keywords": ["deposit", "5,580|5580|paid|transfer"], "what": "deposit of £5,580 paid"},
+    {"id": "K04", "date": "2023-05-20", "importance": "minor", "keywords": ["hob|induction|appliance", "cancel"], "what": "appliance upgrade cancelled"},
+    {"id": "K05", "date": "2023-06-05", "importance": "standard", "keywords": ["start|arriv|lads|began|begin|strip", "work|skip|site|kitchen"], "what": "work starts on site"},
+    {"id": "K06", "date": "2023-06-19", "importance": "notable", "keywords": ["crack", "worktop|quartz", "report|pics|sink|photo"], "what": "Priya reports a crack in the new worktop"},
+    {"id": "K07", "date": "2023-06-19", "importance": "notable", "keywords": ["resin", "not a crack|normal|nothing to worry|dismiss"], "what": "builder says it is a resin line, not a crack"},
+    {"id": "K08", "date": "2023-06-26", "importance": "notable", "keywords": ["stage", "6,000|6000|paid|sent|payment"], "what": "stage payment of £6,000 paid"},
+    {"id": "K09", "date": "2023-07-03", "importance": "major", "keywords": ["water|leak", "ceiling", "sink|bulg|living room"], "what": "leak under the sink comes through the living room ceiling"},
+    {"id": "K10", "date": "2023-07-03", "importance": "notable", "keywords": ["gaz", "joint|waste|push fit|pipe", "sorted|fix|repair"], "what": "Gaz fixes the waste pipe joint"},
+    {"id": "K11", "date": "2023-07-14", "importance": "standard", "keywords": ["done|complet|finish", "work|kitchen|job|invoice"], "what": "builder says the work is complete"},
+    {"id": "K12", "date": "2023-07-31", "importance": "standard", "keywords": ["invoice|inv-1987", "7,020|7020|7 days|balance|final"], "what": "final invoice for £7,020 issued"},
+    {"id": "K13", "date": "2023-08-02", "importance": "notable", "keywords": ["not paying|withh|won't pay|refuses to pay", "balance|worktop|ceiling|surveyor"], "what": "Priya withholds the balance until defects are fixed"},
+    {"id": "K14", "date": "2023-08-02", "importance": "notable", "keywords": ["not replacing|refus|won't replace", "worktop", "signed off"], "what": "builder refuses to replace the worktop"},
+    {"id": "K15", "date": "2023-08-09", "importance": "notable", "keywords": ["survey|greaves|inspect", "crack|defect|worktop", "3,370|resin|duct|ceiling|guarantee"], "what": "surveyor inspects and finds three workmanship defects"},
+    {"id": "K16", "date": "2023-08-11", "importance": "standard", "keywords": ["report", "greaves|survey|issued"], "what": "surveyor's report issued"},
+    {"id": "K17", "date": "2023-08-21", "importance": "major", "keywords": ["letter before claim|claim|court", "14 days|4 september|3,370|remedial|withh"], "what": "letter before claim sent"},
+    {"id": "K18", "date": "2023-09-04", "importance": "notable", "keywords": ["deadline|by 4 september|14 days|respond|reply", "remedial|claim|reduce|confirm|court"], "what": "deadline for the builder to respond"},
+    {"id": "K19", "date": "2023-09-25", "importance": "major", "keywords": ["claim", "court|k0qz12a4|money claim|3,370|3,599|issued|submitted"], "what": "court money claim issued for £3,370"}
+  ],
+  "people": [
+    {"name": "Priya Nair", "also": ["P. Nair", "Mrs P. Nair", "Mrs Priya Nair", "Mrs Nair"], "labels": ["Priya", "Priya Nair"]},
+    {"name": "Dave Hollis", "also": ["D. Hollis", "Mr D. Hollis", "Mr Hollis", "David Hollis"], "labels": ["Dave", "Dave Hollis", "David Hollis"]},
+    {"name": "Martin Greaves", "also": ["Mr Martin Greaves", "M Greaves", "M. Greaves"], "labels": ["Martin", "Martin Greaves"]},
+    {"name": "Gaz", "also": [], "labels": ["Gaz"]}
+  ]
+}

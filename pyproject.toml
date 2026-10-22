@@ -4,7 +4,9 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "casefile"
-version = "0.1.0"
+# The version lives in casefile/__init__.py (__version__); desktop/package.json must match it
+# (tests/test_version.py checks).
+dynamic = ["version"]
 description = "Turn a folder of long, messy documents into a prioritised, easy-to-read log of events, using a local AI model."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -12,7 +14,12 @@ license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]
 authors = [{ name = "Ross Shelford" }]
 dependencies = [
-    "pypdf>=4.0",
+    # [crypto] pulls in cryptography: without it every AES-encrypted PDF fails to open,
+    # including ones that only lock editing.
+    "pypdf[crypto]>=4.0",
+    "pypdfium2>=4",
+    "openpyxl>=3.1",
+    "olefile>=0.46",
     "reportlab>=4.0",
     "svglib>=1.5",
     "fastapi>=0.110",
@@ -22,6 +29,8 @@ dependencies = [
 
 [project.optional-dependencies]
 test = ["pytest>=8", "httpx>=0.27"]
+# Browser tests of the web page (tests/test_web_e2e.py); also run `playwright install chromium`.
+e2e = ["playwright>=1.40"]
 
 [project.scripts]
 casefile = "casefile.cli:main"
@@ -32,6 +41,9 @@ Issues = "https://github.com/RossShelford/casefile/issues"
 
 [tool.setuptools]
 packages = ["casefile"]
+
+[tool.setuptools.dynamic]
+version = { attr = "casefile.__version__" }
 
 [tool.setuptools.package-data]
 casefile = ["assets/fonts/*", "assets/icons/*", "web/*"]

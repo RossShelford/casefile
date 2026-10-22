@@ -43,6 +43,8 @@ async function api(method, path, body) {
     options.body = JSON.stringify(body);
   }
   const response = await fetch(path, options);
+  // The engine only answers the browser that opened its start-up link (which sets a cookie).
+  if (response.status === 403) throw new Error("Open casefile from the link printed when it started.");
   if (!response.ok) {
     let message = `${response.status} ${response.statusText}`;
     try { message = (await response.json()).detail || message; } catch { /* not JSON */ }
@@ -61,8 +63,13 @@ function aboutTime(seconds) {
   return `About ${hours < 10 ? hours.toFixed(1) : Math.round(hours)} hours left.`;
 }
 
-function show(...nodes) {
+function stopPolling() {
   clearInterval(poller);
+  poller = null;
+}
+
+function show(...nodes) {
+  stopPolling();
   $app.replaceChildren(...nodes);
   $app.focus();
 }
@@ -182,8 +189,8 @@ async function home() {
       setup,
       choose,
       el("p", { class: "note" }, DESKTOP
-        ? "Everything stays on this computer. casefile reads the folder where it is and never changes it. It reads PDF, Word, email, web pages and text files; photos and other files are listed but not read."
-        : "Everything stays on this computer. Reads PDF, Word, email, web pages and text files. Photos and other files are listed but not read."),
+        ? "Everything stays on this computer. casefile reads the folder where it is and never changes it. It reads PDF, Word, Excel, PowerPoint, emails (including Outlook files and attachments), web pages and text; photos and other files are listed but not read."
+        : "Everything stays on this computer. Reads PDF, Word, Excel, PowerPoint, emails (including Outlook files and attachments), web pages and text. Photos and other files are listed but not read."),
     ),
     past,
   );
@@ -210,8 +217,33 @@ async function home() {
     el("ul", {}, jobs.map((job) => el("li", {},
       el("a", { href: `#/job/${job.id}` }, job.title),
       el("span", { class: "meta" }, describeStatus(job)),
+      el("button", { class: "linkish", type: "button", "aria-label": `Delete ${job.title}`, onclick: async (e) => {
+        if (!(await deleteJob(job))) return;
+        e.target.closest("li").remove();
+        if (!past.querySelector("li")) home();
+      } }, "Delete"),
     ))),
+    el("p", { class: "note" },
+      el("button", { class: "linkish", type: "button", onclick: deleteEverything }, "Delete all reports and saved data")),
   );
+}
+
+// Deleting removes the report, any copies of the documents and the saved model results for it.
+async function deleteJob(job) {
+  if (!confirm(`Delete “${job.title}”? This removes the report and everything casefile saved while reading the folder.`)) return false;
+  try {
+    await api("DELETE", `/api/jobs/${job.id}`);
+    return true;
+  } catch (error) {
+    alert(`It couldn't be deleted: ${error.message}`);
+    return false;
+  }
+}
+
+async function deleteEverything() {
+  if (!confirm("Delete every report and everything casefile has saved? Reports still being built are stopped first. Your own folders are not touched.")) return;
+  try { await api("DELETE", "/api/data"); } catch (error) { alert(`Not everything could be deleted: ${error.message}`); }
+  home();
 }
 
 function describeStatus(job) {
@@ -221,7 +253,9 @@ function describeStatus(job) {
     return `${when}. ${plural(c.major || 0, "major event")}.`;
   }
   if (job.status === "failed") return `${when}. Failed.`;
+  if (job.status === "cancelled") return `${when}. Stopped.`;
   if (job.status === "running") return `${when}. Reading, ${job.total ? Math.floor((100 * job.done) / job.total) : 0}% done.`;
+  if (job.status === "uploading") return `${when}. Still being sent.`;
   return `${when}. Waiting to start.`;
 }
 
@@ -260,8 +294,9 @@ async function sendFolder(files) {
     return;
   }
 
+  let job = null;
   try {
-    const job = await api("POST", "/api/jobs", { title: folder, folder, not_sent: notSent.map((x) => x.path) });
+    job = await api("POST", "/api/jobs", { title: folder, folder, not_sent: notSent.map((x) => x.path) });
     let sent = 0;
     for (let i = 0; i < send.length;) {
       const form = new FormData();
@@ -281,38 +316,81 @@ async function sendFolder(files) {
     await api("POST", `/api/jobs/${job.id}/start`);
     location.hash = `#/job/${job.id}`;
   } catch (error) {
-    status.replaceWith(el("p", { class: "error" }, `Sending failed: ${error.message}`));
+    // Don't leave a half-sent copy of the folder behind: stop and delete the unfinished report.
+    if (job) {
+      await api("POST", `/api/jobs/${job.id}/cancel`).catch(() => null);
+      await api("DELETE", `/api/jobs/${job.id}`).catch(() => null);
+    }
+    status.replaceWith(
+      el("p", { class: "error" }, `Sending failed: ${error.message}`),
+      el("p", {}, "What was sent so far has been deleted."),
+      el("div", { class: "row-actions" },
+        el("button", { class: "btn", type: "button", onclick: chooseFolder }, icon("folder-open"), "Choose the folder again"),
+        el("a", { class: "btn quiet", href: "#/" }, "Back to the start")),
+    );
   }
 }
 
 // ---------- a job: progress, then the report ----------
 
+function onJobPage(id) { return location.hash === `#/job/${id}`; }
+
+const ENDED = ["done", "failed", "cancelled"];
+
 async function openJob(id) {
+  stopPolling();
   let job;
   try { job = await api("GET", `/api/jobs/${id}`); } catch (error) {
+    if (!onJobPage(id)) return;
     show(el("section", { class: "working" }, el("h1", {}, "Report not found"), el("p", {}, error.message),
       el("a", { class: "btn quiet", href: "#/" }, "Start again")));
     return;
   }
+  if (!onJobPage(id)) return; // the user moved on while this was loading
   if (job.status === "done") return showReport(job);
-  if (job.status === "failed") {
+  if (job.status === "failed" || job.status === "cancelled") {
     show(el("section", { class: "working" },
       el("h1", {}, job.title),
-      el("p", { class: "error" }, job.error),
-      el("button", { class: "btn", type: "button", onclick: chooseFolder }, icon("folder-open"), "Choose the folder again"),
+      job.status === "failed"
+        ? el("p", { class: "error" }, job.error)
+        : el("p", {}, "You stopped this report before it finished. What was read so far is saved, so choosing the folder again picks up where it left off."),
+      el("div", { class: "row-actions" },
+        el("button", { class: "btn", type: "button", onclick: chooseFolder }, icon("folder-open"), "Choose the folder again"),
+        el("button", { class: "btn quiet", type: "button", onclick: async () => {
+          if (await deleteJob(job)) location.hash = "#/";
+        } }, "Delete")),
     ));
     return;
   }
   const heading = el("p");
   const bar = el("div");
   const current = el("p", { class: "current" });
+  let stopping = false;
+  const cancel = el("button", { class: "btn quiet", type: "button", onclick: async () => {
+    if (!confirm("Stop reading this folder? What was read so far is saved, so choosing the folder again picks up where it left off.")) return;
+    cancel.disabled = true;
+    try {
+      await api("POST", `/api/jobs/${id}/cancel`);
+      stopping = true;
+      cancel.textContent = "Stopping…";
+      heading.textContent = "Stopping after the part being read now.";
+    } catch (error) {
+      cancel.disabled = false;
+      current.textContent = `It couldn't be stopped: ${error.message}`;
+    }
+  } }, "Stop");
   show(el("section", { class: "working", "aria-live": "polite" },
     el("h1", {}, job.title), heading, el("div", { class: "meter" }, bar), current,
+    el("div", { class: "row-actions" }, cancel),
     el("p", { class: "note" }, "You can close this page. The report keeps building and will be listed on the start page."),
   ));
   const update = (j) => {
-    if (j.status === "queued") {
+    if (stopping) {
+      heading.textContent = "Stopping after the part being read now.";
+    } else if (j.status === "queued") {
       heading.textContent = "Waiting for the report before this one to finish.";
+    } else if (j.status === "uploading") {
+      heading.textContent = "The files are still being sent.";
     } else if (!j.total) {
       heading.textContent = "Looking through the files.";
     } else if (!j.done) {
@@ -325,36 +403,87 @@ async function openJob(id) {
       heading.textContent = `${j.done.toLocaleString()} of ${plural(j.total, "part")} read. ${aboutTime(j.eta_seconds)}`;
     }
     bar.style.width = j.total ? `${(100 * j.done) / j.total}%` : "0";
-    current.textContent = j.current ? `Last read: ${j.current}` : "";
+    if (!current.textContent.startsWith("It couldn't")) current.textContent = j.current ? `Last read: ${j.current}` : "";
   };
   update(job);
-  poller = setInterval(async () => {
-    try {
-      const j = await api("GET", `/api/jobs/${id}`);
-      if (j.status === "done" || j.status === "failed") openJob(id);
-      else update(j);
-    } catch { /* keep polling through a brief hiccup */ }
+  const mine = setInterval(async () => {
+    let j;
+    try { j = await api("GET", `/api/jobs/${id}`); } catch { return; /* keep polling through a brief hiccup */ }
+    // A reply that arrives after the user left this page (or after a newer view started) must not redraw.
+    if (poller !== mine || !onJobPage(id)) return;
+    if (ENDED.includes(j.status)) openJob(id);
+    else update(j);
   }, 2000);
+  poller = mine;
 }
 
-function eventRow(ev, { quote = true } = {}) {
-  const tag = ev.importance === "major" || ev.importance === "notable" ? el("span", { class: "tag" }, LABEL[ev.importance]) : null;
-  const words = quote && ev.quote ? el("blockquote", { hidden: true }, `“${ev.quote}”`) : null;
-  const toggle = words
-    ? el("button", { class: "linkish", type: "button", "aria-expanded": "false", onclick: (e) => {
-        words.hidden = !words.hidden;
-        e.currentTarget.setAttribute("aria-expanded", String(!words.hidden));
-        e.currentTarget.textContent = words.hidden ? "Show the words" : "Hide the words";
-      } }, "Show the words")
-    : null;
-  return el("li", { class: `ev ${ev.importance}`, "data-people": ev.people.join("\n") },
-    mark(ev.icon, ev.importance),
-    el("time", { datetime: ev.date || null }, ev.date_label || "No date"),
-    el("p", { class: "what" }, ev.summary),
-    el("span", {}),
-    el("p", { class: "src" }, tag, el("span", {}, ev.source), toggle),
-    words,
+// Sources look like "folder/file.pdf, p. 3" or "mail/a.eml > notice.pdf, line 4".
+function splitSource(source) {
+  const cut = source.lastIndexOf(", ");
+  const path = cut === -1 ? source : source.slice(0, cut);
+  const where = cut === -1 ? "" : source.slice(cut + 2);
+  const slash = path.lastIndexOf("/");
+  return { folder: slash === -1 ? "" : path.slice(0, slash), file: slash === -1 ? path : path.slice(slash + 1), where };
+}
+
+let sourceCount = 0;
+
+// One event: what happened reads on its own; where it came from stays one click away
+// ("Show source" under the date), so thousands of file names don't crowd the log.
+function eventRow(ev) {
+  const id = `source-${++sourceCount}`;
+  const { folder, file, where } = splitSource(ev.source);
+  const panel = el("div", { class: "source", id, hidden: true },
+    el("p", { class: "source-file", title: ev.source },
+      el("span", { class: "file" }, file), where ? el("span", { class: "where" }, where) : null),
+    folder ? el("p", { class: "source-folder", title: folder }, `in ${folder}`) : null,
+    ev.quote ? el("blockquote", {}, `“${ev.quote}”`) : null,
   );
+  const toggle = el("button", {
+    class: "show-source", type: "button", "aria-expanded": "false", "aria-controls": id,
+    onclick: (e) => {
+      panel.hidden = !panel.hidden;
+      e.currentTarget.setAttribute("aria-expanded", String(!panel.hidden));
+      e.currentTarget.textContent = panel.hidden ? "Show source" : "Hide source";
+    },
+  }, "Show source");
+  const level = ev.importance === "major" || ev.importance === "notable"
+    ? el("span", { class: "sr-only" }, `${LABEL[ev.importance]}: `) : null;
+  return el("li", { class: `ev ${ev.importance}` },
+    mark(ev.icon, ev.importance),
+    el("div", { class: "when" }, el("time", { datetime: ev.date || null }, ev.date_label || "No date"), toggle),
+    el("p", { class: "what" }, level, ev.summary),
+    panel,
+  );
+}
+
+// A list that shows `page` items at a time with a "Show more" button: a report can hold
+// tens of thousands of events or files, and building them all at once freezes the page.
+function pagedList(items, renderItem, { page = 200, className = "events", noun = "more" } = {}) {
+  const list = el("ul", { class: className });
+  const more = el("button", { class: "more", type: "button" });
+  let shown = 0;
+  function addPage() {
+    const next = items.slice(shown, shown + page);
+    list.append(...next.map(renderItem));
+    shown += next.length;
+    const left = items.length - shown;
+    more.hidden = left <= 0;
+    more.textContent = `Show ${Math.min(page, left).toLocaleString()} ${noun} (${left.toLocaleString()} not shown)`;
+  }
+  more.addEventListener("click", addPage);
+  addPage();
+  return el("div", { class: "paged" }, list, more);
+}
+
+function searchBox(label, onInput) {
+  let timer = null;
+  const input = el("input", { type: "search", class: "search", "aria-label": label, placeholder: label });
+  input.addEventListener("input", () => {
+    clearTimeout(timer);
+    timer = setTimeout(() => onInput(input.value.trim().toLocaleLowerCase()), 150);
+  });
+  return input;
 }
 
 function monthName(key) {
@@ -367,45 +496,60 @@ function monthName(key) {
 async function showReport(job) {
   let rep;
   try { rep = await api("GET", `/api/jobs/${job.id}/report`); } catch (error) {
-    show(el("p", { class: "error" }, error.message));
+    if (onJobPage(job.id)) show(el("p", { class: "error" }, error.message));
     return;
   }
+  if (!onJobPage(job.id)) return;
   const visible = new Set(LEVELS);
   let person = null;
+  const matches = (ev) => visible.has(ev.importance) && (!person || ev.people.includes(person));
 
-  // ---- the log, grouped by month ----
+  // ---- the log, grouped by month, each month built only when it scrolls near ----
   const groups = new Map();
   for (const ev of rep.events) {
     const key = ev.date ? ev.date.slice(0, 7) : "";
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(ev);
   }
-  const months = [...groups].map(([key, evs]) =>
-    el("section", { class: "month" }, el("h2", {}, monthName(key)), el("ul", { class: "events" }, evs.map((ev) => eventRow(ev)))));
+  const months = [...groups].map(([key, events]) => {
+    const body = el("div");
+    const section = el("section", { class: "month" }, el("h2", {}, monthName(key)), body);
+    return { events, section, body, built: false };
+  });
+  const ROW_HEIGHT = 64; // rough height of one event, to reserve space before a month is built
+  function buildMonth(month) {
+    month.built = true;
+    month.section.style.removeProperty("min-height");
+    month.body.replaceChildren(pagedList(month.events.filter(matches), eventRow, { page: 300, noun: "more events" }));
+  }
+  const observer = new IntersectionObserver((entries) => {
+    for (const entry of entries) {
+      const month = months.find((m) => m.section === entry.target);
+      if (entry.isIntersecting && month && !month.built) buildMonth(month);
+    }
+  }, { rootMargin: "1500px 0px" });
+  months.forEach((month) => observer.observe(month.section));
   const log = el("section", { class: "log", "aria-label": "What happened" },
-    months.length ? months : el("p", { class: "empty" }, "No events were found in these files."));
+    months.length ? months.map((m) => m.section) : el("p", { class: "empty" }, "No events were found in these files."));
   const empty = el("p", { class: "empty", hidden: true }, "Nothing matches. Turn a filter back on.");
 
   const major = rep.events.filter((ev) => ev.importance === "major");
   const key = major.length
     ? el("section", { class: "key", "aria-labelledby": "key-h" },
-        el("h2", { id: "key-h" }, `Key events (${major.length})`),
-        el("ul", { class: "events" }, major.map((ev) => eventRow(ev, { quote: false }))))
+        el("h2", { id: "key-h" }, `Key events (${major.length.toLocaleString()})`),
+        pagedList(major, eventRow, { page: 50, noun: "more key events" }))
     : null;
 
-  // ---- filters: importance chips double as the legend ----
+  // ---- filters work on the data, so months not yet built are counted correctly ----
   const whoLine = el("p", { class: "who-filter", hidden: true });
   function applyFilters() {
-    for (const row of log.querySelectorAll(".ev")) {
-      const level = LEVELS.find((l) => row.classList.contains(l));
-      const involved = !person || row.dataset.people.split("\n").includes(person);
-      row.hidden = !(visible.has(level) && involved);
-    }
     let any = false;
-    for (const month of log.querySelectorAll(".month")) {
-      const shown = month.querySelector(".ev:not([hidden])") !== null;
-      month.hidden = !shown;
-      any ||= shown;
+    for (const month of months) {
+      const count = month.events.reduce((n, ev) => n + (matches(ev) ? 1 : 0), 0);
+      month.section.hidden = count === 0;
+      any ||= count > 0;
+      if (month.built) buildMonth(month);
+      else month.section.style.setProperty("min-height", `${Math.min(count, 300) * ROW_HEIGHT + 60}px`);
     }
     empty.hidden = any || !rep.events.length;
     if (key) key.hidden = person !== null || !visible.has("major");
@@ -426,25 +570,70 @@ async function showReport(job) {
     el("dd", {}, CONFIG.importance[level].meaning),
   ]));
 
-  // ---- who's who ----
+  // ---- who's who: searchable, shown 100 at a time ----
   const personButtons = new Map();
   function choosePerson(label) {
     person = person === label ? null : label;
     for (const [name, button] of personButtons) button.setAttribute("aria-pressed", String(name === person));
     applyFilters();
   }
-  const people = el("ul", { class: "people" }, rep.people.map((p) => {
-    const button = el("button", { type: "button", "aria-pressed": "false", onclick: () => choosePerson(p.label),
+  function personRow(p) {
+    const button = el("button", { type: "button", "aria-pressed": String(p.label === person), onclick: () => choosePerson(p.label),
       title: p.full_name !== p.label ? p.full_name : null },
       el("span", { class: "name" }, p.label),
-      el("span", { class: "count" }, p.events),
+      el("span", { class: "count" }, p.events.toLocaleString()),
       el("span", { class: "role" }, [p.full_name !== p.label ? p.full_name : null, ...p.roles].filter(Boolean).join(", ")));
     personButtons.set(p.label, button);
     return el("li", {}, button);
-  }));
+  }
+  const peopleBox = el("div");
+  const showPeople = (query) => {
+    personButtons.clear();
+    const found = query
+      ? rep.people.filter((p) => `${p.label} ${p.full_name} ${p.roles.join(" ")}`.toLocaleLowerCase().includes(query))
+      : rep.people;
+    peopleBox.replaceChildren(found.length
+      ? pagedList(found, personRow, { page: 100, className: "people", noun: "more people" })
+      : el("p", { class: "note" }, "Nobody matches."));
+  };
+  showPeople("");
+
+  // ---- files: built only when opened; searchable; unread files can be listed alone ----
+  const unread = rep.sources.filter((s) => s.status !== "ok");
+  const sourceRow = (s) => el("li", {},
+    el("span", { class: "path", title: s.path }, s.path),
+    el("span", { class: "status" }, s.status === "ok" ? plural(s.events, "event") : s.status));
+  const filesBox = el("div");
+  let onlyUnread = false;
+  let fileQuery = "";
+  const showFiles = () => {
+    const pool = onlyUnread ? unread : rep.sources;
+    const found = fileQuery ? pool.filter((s) => s.path.toLocaleLowerCase().includes(fileQuery)) : pool;
+    filesBox.replaceChildren(found.length
+      ? pagedList(found, sourceRow, { page: 200, className: "sources", noun: "more files" })
+      : el("p", { class: "note" }, "No file matches."));
+  };
+  const unreadToggle = unread.length
+    ? el("label", { class: "check" },
+        el("input", { type: "checkbox", onchange: (e) => { onlyUnread = e.currentTarget.checked; showFiles(); } }),
+        ` Only files that couldn't be read (${unread.length.toLocaleString()})`)
+    : null;
+  const files = el("details", {},
+    el("summary", {}, `Files (${rep.sources.length.toLocaleString()}${unread.length ? `, ${unread.length.toLocaleString()} not read` : ""})`),
+    el("div", { class: "list-tools" }, searchBox("Find a file", (q) => { fileQuery = q; showFiles(); }), unreadToggle),
+    filesBox);
+  files.addEventListener("toggle", () => { if (files.open && !filesBox.firstChild) showFiles(); });
+
+  const checking = rep.unverified.length ? el("details", {},
+    el("summary", {}, `Needs checking (${rep.unverified.length.toLocaleString()})`),
+    el("p", { class: "note" }, "The AI reported these, but the words it quoted were not found in the file. Treat them as leads, not facts."))
+    : null;
+  if (checking) checking.addEventListener("toggle", () => {
+    if (checking.open && checking.children.length === 2) checking.append(pagedList(rep.unverified, eventRow, { page: 100, noun: "more" }));
+  });
 
   const period = rep.period ? `${rep.events.find((e) => e.date).date_label} to ${[...rep.events].reverse().find((e) => e.date).date_label}. ` : "";
-  const filesRead = rep.sources.filter((s) => s.status === "ok").length;
+  const filesRead = rep.sources.length - unread.length;
 
   show(el("div", { class: "report" },
     el("div", {},
@@ -461,31 +650,23 @@ async function showReport(job) {
       whoLine,
       key,
       el("p", { class: "note words-hint" },
-        "Under each event, “Show the words” gives the exact text it came from and the file it's in. "
+        "“Show source” under a date gives the file, the page or line, and the exact words the event came from. "
         + "The AI can misread things, so check anything important there."),
       log,
       empty,
-      rep.unverified.length ? el("details", {},
-        el("summary", {}, `Needs checking (${rep.unverified.length})`),
-        el("p", { class: "note" }, "The AI reported these, but the words it quoted were not found in the file. Treat them as leads, not facts."),
-        el("ul", { class: "events" }, rep.unverified.map((ev) => eventRow(ev)))) : null,
-      el("details", {},
-        el("summary", {}, `Files (${rep.sources.length})`),
-        el("ul", { class: "sources" }, rep.sources.map((s) => el("li", {},
-          el("span", {}, s.path),
-          el("span", { class: "status" }, s.status === "ok" ? plural(s.events, "event") : s.status))))),
+      checking,
+      files,
       el("p", { class: "note" },
         `Written by ${rep.model}, an AI model running on this computer. It can miss or misread things: check the source before relying on an entry. `,
         el("button", { class: "linkish", type: "button", onclick: async () => {
-          if (!confirm(`Delete the report “${rep.title}”?`)) return;
-          await api("DELETE", `/api/jobs/${job.id}`);
-          location.hash = "#/";
+          if (await deleteJob({ id: job.id, title: rep.title })) location.hash = "#/";
         } }, "Delete this report")),
     ),
     el("aside", { class: "aside", "aria-labelledby": "who-h" },
       el("h2", { id: "who-h" }, "Who’s who"),
       el("p", { class: "note" }, "Choose a person to see only their events."),
-      people),
+      rep.people.length > 15 ? searchBox(`Find one of ${rep.people.length.toLocaleString()} people`, showPeople) : null,
+      peopleBox),
   ));
   applyFilters();
 }
@@ -499,7 +680,10 @@ function route() {
 }
 
 (async () => {
-  CONFIG = await api("GET", "/api/config");
+  try { CONFIG = await api("GET", "/api/config"); } catch (error) {
+    $app.replaceChildren(el("section", { class: "working" }, el("h1", {}, "casefile can't open"), el("p", { class: "error" }, error.message)));
+    return;
+  }
   checkModel();
   setInterval(checkModel, 30000);
   window.addEventListener("hashchange", route);

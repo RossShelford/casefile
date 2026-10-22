@@ -1,0 +1,29 @@
+{
+  "description": "Warehouse team leader's grievance after refusing to use an unsafe forklift. Formats: Word letter, Slack JSON export, multipart email (text + HTML), abbreviated meeting notes with initials and dd/mm/yy dates, inspection certificate, RTF outcome letter.",
+  "events": [
+    {"id": "G01", "date": "2023-04-14", "importance": "notable", "keywords": ["flt|forklift|truck", "brake", "tag|out of use|off the floor|took"], "what": "Daniel takes forklift FLT 3 out of use: brakes spongy"},
+    {"id": "G02", "date": "2023-04-14", "importance": "standard", "keywords": ["dramatic|back on|9am|9 am", "flt|forklift|truck|load"], "what": "Karen Holt tells him not to be dramatic, wants the truck back for the 9am load"},
+    {"id": "G03", "date": "2023-04-14", "importance": "minor", "keywords": ["load", "late"], "what": "Karen: the load will go out late"},
+    {"id": "G04", "date": "2023-04-14", "importance": "notable", "keywords": ["find another job|handle the pace"], "what": "Karen Holt says 'if you can't handle the pace, find another job'"},
+    {"id": "G05", "date": "2023-04-17", "importance": "notable", "keywords": ["overtime", "saturday|sat", "remov|taken off|off the|no longer|going to jas"], "what": "Daniel removed from Saturday overtime"},
+    {"id": "G06", "date": "2023-04-17", "importance": "standard", "keywords": ["operational reasons|not discussing|refus|why"], "what": "Karen refuses to explain beyond 'operational reasons'"},
+    {"id": "G07", "date": "2023-04-24", "importance": "notable", "keywords": ["sick|fit note|signed off", "stress"], "what": "Daniel signed off sick with stress until 5 May"},
+    {"id": "G08", "date": "2023-05-03", "importance": "notable", "keywords": ["grievance", "formal|letter|raise|submit|lodg"], "what": "Daniel raises a formal grievance"},
+    {"id": "G09", "date": "2023-05-05", "importance": "minor", "keywords": ["invit", "meeting", "grievance|16 may"], "what": "HR invites Daniel to a grievance meeting on 16 May"},
+    {"id": "G10", "date": "2023-05-16", "importance": "notable", "keywords": ["meeting|mtg|held|attend", "grievance", "sandhu|jas|accompan|witness|byrne|michelle"], "what": "grievance meeting held; Jas Sandhu confirms the comment"},
+    {"id": "G11", "date": "2023-05-17", "importance": "minor", "keywords": ["notes", "comment|sent|amend"], "what": "meeting notes sent to Daniel for comment"},
+    {"id": "G12", "date": "2023-05-22", "importance": "major", "keywords": ["examin|inspect|loler|safelift|doyle", "brake", "danger|out of use|immediately"], "what": "thorough examination finds the forklift's brakes dangerous"},
+    {"id": "G13", "date": "2023-05-22", "importance": "notable", "keywords": ["hse|enforcing authority|health and safety executive", "notif|report|sent"], "what": "dangerous defect notified to the HSE"},
+    {"id": "G14", "date": "2023-06-02", "importance": "notable", "keywords": ["grievance|outcome", "upheld|uphold"], "what": "grievance outcome: overtime and safety complaints upheld, comments not upheld"},
+    {"id": "G15", "date": "2023-06-09", "importance": "notable", "keywords": ["appeal", "deadline|9 june|working days|garside|by"], "what": "deadline to appeal the outcome"},
+    {"id": "G16", "date": "2023-06-10", "importance": "notable", "keywords": ["overtime", "restor|reinstat|back on|return|put back"], "what": "Daniel restored to Saturday overtime"}
+  ],
+  "people": [
+    {"name": "Daniel Okafor", "also": ["D. Okafor", "Mr D. Okafor", "Mr Okafor"], "labels": ["Daniel", "Daniel Okafor"]},
+    {"name": "Karen Holt", "also": ["Ms Holt", "K. Holt"], "labels": ["Karen", "Karen Holt"]},
+    {"name": "Michelle Byrne", "also": ["Ms Byrne", "M. Byrne"], "labels": ["Michelle", "Michelle Byrne"]},
+    {"name": "Jaswinder Sandhu", "also": ["Jas Sandhu", "Jas", "J. Sandhu"], "labels": ["Jaswinder", "Jas", "Jaswinder Sandhu", "Jas Sandhu"]},
+    {"name": "Neil Garside", "also": ["Mr Neil Garside", "Mr Garside"], "labels": ["Neil", "Neil Garside"]},
+    {"name": "P. Doyle", "also": ["P Doyle", "Doyle"], "labels": ["P. Doyle", "P Doyle", "Doyle"]}
+  ]
+}

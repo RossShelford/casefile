@@ -1,0 +1,20 @@
+name: Feature request
+description: A new file format, report feature or improvement.
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: The situation and the problem, before any solution. Who reads the report, and what do they need from it?
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would help?
+      description: How you'd like it to work. Mockups or examples welcome (made-up documents only).
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What do you do today instead?

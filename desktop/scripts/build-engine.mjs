@@ -12,8 +12,12 @@ const python = process.env.CASEFILE_PYTHON || (existsSync(venv) ? venv : "python
 
 const run = (args) => execFileSync(python, args, { cwd: repo, stdio: "inherit" });
 
-// Editable install: brings in the dependencies without replacing a developer's working copy.
-run(["-m", "pip", "install", "--quiet", "-e", ".", "pyinstaller>=6.6"]);
+// Every dependency, PyInstaller and the build backend come from a lock with pinned versions and
+// hashes, so a release can't pick up whatever PyPI serves on the day (see CONTRIBUTING.md to
+// regenerate it). casefile itself goes in last, editable and without dependencies or build
+// isolation, so nothing unhashed is fetched and a developer's working copy is left in place.
+run(["-m", "pip", "install", "--quiet", "--require-hashes", "-r", join(desktop, "engine-requirements.txt")]);
+run(["-m", "pip", "install", "--quiet", "--no-deps", "--no-build-isolation", "-e", "."]);
 run([
   "-m", "PyInstaller",
   "--noconfirm", "--clean", "--onedir",

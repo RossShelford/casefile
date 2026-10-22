@@ -1,0 +1,11 @@
+[
+  {"type": "message", "ts": "1681457520.001200", "datetime": "2023-04-14T07:32:00Z", "user_name": "Daniel Okafor", "text": "morning all. FLT 3 brakes spongy again, 2nd time this week. I've taken it off the floor and tagged it out, keys are in the office. Please nobody use it", "reactions": [{"name": "+1", "count": 3}]},
+  {"type": "message", "ts": "1681458300.003400", "datetime": "2023-04-14T07:45:00Z", "user_name": "Karen Holt", "text": "<@Daniel Okafor> we need FLT 3 back on for the 9am Tesco load. it passed its check in Jan. Don't be dramatic"},
+  {"type": "message", "ts": "1681458420.003900", "datetime": "2023-04-14T07:47:00Z", "user_name": "Daniel Okafor", "text": "It's not safe Karen. I've logged it on the defect sheet. Not putting it back on until maintenance look at it"},
+  {"type": "message", "ts": "1681458600.004100", "datetime": "2023-04-14T07:50:00Z", "user_name": "Jas Sandhu", "text": "who's got the van keys?? :eyes:"},
+  {"type": "message", "ts": "1681462800.005500", "datetime": "2023-04-14T09:00:00Z", "user_name": "Karen Holt", "text": "Fine. Load going out late then. Will be picking this up with you Monday"},
+  {"type": "message", "ts": "1681716900.007700", "datetime": "2023-04-17T07:35:00Z", "user_name": "Karen Holt", "text": "Rota for w/c 24th pinned in the channel. Note Saturday overtime is now going to Jas and Mo going forward, Daniel is off the Saturday overtime list", "files": [{"name": "rota_wc24apr.xlsx"}]},
+  {"type": "message", "ts": "1681717320.008000", "datetime": "2023-04-17T07:42:00Z", "user_name": "Daniel Okafor", "text": "Can I ask why I've been taken off Saturdays? I've done them for 3 years"},
+  {"type": "message", "ts": "1681717500.008200", "datetime": "2023-04-17T07:45:00Z", "user_name": "Karen Holt", "text": "Operational reasons. Not discussing it on here"},
+  {"type": "channel_join", "ts": "1682000000.000100", "datetime": "2023-04-20T14:13:20Z", "user_name": "Mo Rahman", "text": "has joined the channel"}
+]

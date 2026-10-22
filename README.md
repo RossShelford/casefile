@@ -36,45 +36,56 @@ Download the installer for your computer from the [Releases page](https://github
 **First run.** casefile uses [Ollama](https://ollama.com), a free app, to run the AI model on your
 computer. If it isn't installed, casefile shows a *Download Ollama* button; install it and choose
 *Check again*. casefile then offers to download the AI model (about 4.7 GB, once), with a progress
-bar. After that: choose *Choose folder*, pick a folder, and wait for the log. If Ollama is
-installed but not running, casefile starts it, and stops it again when you quit. (If casefile
-crashes instead of quitting, that Ollama keeps running, as it does when you open the Ollama app
-yourself; it frees the model's memory after 5 idle minutes.)
+bar. After that: choose *Choose folder*, pick a folder, and wait for the log. A running report can
+be stopped with *Stop*. If Ollama is installed but not running, casefile starts it, and stops it
+again when you quit. (If casefile crashes instead of quitting, that Ollama keeps running, as it
+does when you open the Ollama app yourself; it frees the model's memory after 5 idle minutes.)
+
+**Scanned PDFs** (photos of pages, with no text layer) are read with OCR if
+[Tesseract](https://tesseract-ocr.github.io/tessdoc/Installation.html) is installed
+(`brew install tesseract` on a Mac). Without it they're listed under *Sources* as needing OCR.
 
 The folder is read where it is: nothing is copied or uploaded, and casefile never changes it.
-Reports are kept in casefile's own data folder until you choose *Delete this report*.
+Reports, and the model's saved answers for their documents, are kept in casefile's own data folder
+until you choose *Delete* on that report, or *Delete all reports and saved data* on the start page.
 
 **The app isn't code-signed yet**, so the first launch needs one extra step:
 
-- **Mac:** open the `.dmg` and drag casefile to Applications. The first time, right-click casefile
-  and choose *Open*, then *Open* again. If macOS says the app "is damaged", run
-  `xattr -dr com.apple.quarantine /Applications/casefile.app` in Terminal.
+- **Mac:** open the `.dmg` and drag casefile to Applications. Open it once; macOS refuses. Then go
+  to *System Settings > Privacy & Security*, find "casefile was blocked", and choose *Open Anyway*.
 - **Windows:** if SmartScreen says "Windows protected your PC", choose *More info*, then *Run anyway*.
 - **Linux:** make the AppImage executable (`chmod +x casefile-*.AppImage`) and run it.
 
-Signing removes these steps. It needs an Apple Developer ID (macOS) and a code-signing
+Each installer on the Releases page has a SHA-256 checksum (`SHA256SUMS.txt`) and a GitHub
+build-provenance attestation, so you can check it was built from this repository:
+`gh attestation verify <file> --repo RossShelford/casefile`.
+
+Signing removes the extra step. It needs an Apple Developer ID (macOS) and a code-signing
 certificate (Windows); electron-builder picks them up from the usual `CSC_LINK` /
 `CSC_KEY_PASSWORD` / `APPLE_ID` environment variables once they exist.
 
 **How the app is put together.** The window is Electron. The engine is the same Python code as the
 command line, frozen with PyInstaller and shipped inside the app, so users don't need Python. At
-each launch the app starts the engine on a private local port with a new random secret, which only
-the app's own window holds. The engine refuses every request without it, so no other program or
-website on the computer can use it. The engine also exits by itself if the app closes or crashes.
+each launch the app starts the engine with a new random secret, which only the app's own window
+holds; the engine picks its own private port and tells the app which one. The engine refuses every
+request without the secret, so no other program or website on the computer can use it, and it
+exits by itself if the app closes or crashes. Electron's security fuses are set (no
+`ELECTRON_RUN_AS_NODE`, no Node options or inspector flags, app files integrity-checked), and the
+window only ever shows its own start page and the engine.
 
 ### Build the app
 
 ```sh
 python -m venv .venv && .venv/bin/pip install -e .
 cd desktop
-npm install
+npm ci
 npm start          # run from source, using the Python in ../.venv
-npm run dist       # build the engine, then the installer for this computer, into desktop/release
+npm run dist       # build the engine (from the hashed lock file), then the installer, into desktop/release
 ```
 
 Each operating system has to build its own installer. `.github/workflows/desktop.yml` does all
-four on GitHub: push a tag such as `v0.2.0` and it runs the tests, builds every installer, and
-attaches them to a draft release.
+four on GitHub: push a tag such as `v0.2.0` and it runs the tests, builds every installer, attests
+them, and attaches them with their checksums to a draft release.
 
 ## Install from source (command line and browser)
 
@@ -83,6 +94,7 @@ attaches them to a draft release.
 brew install ollama            # or https://ollama.com/download
 ollama serve &                 # skip if the Ollama app is already running
 ollama pull qwen2.5:7b         # ~4.7 GB, works on a 16 GB laptop
+brew install tesseract         # optional: reads scanned PDFs
 
 # 2. casefile
 pip install .
@@ -91,28 +103,40 @@ pip install .
 ## Use it in the browser
 
 ```sh
-casefile serve                 # then open http://localhost:8765
+casefile serve
+# casefile: open http://127.0.0.1:8765/?token=...   <- open this exact link
 ```
+
+Open the link `casefile serve` prints. It carries a secret that is new every time casefile starts;
+the page stores it as a cookie and removes it from the address bar. Without it, casefile refuses
+every request, so other people and programs on the same computer can't read your reports.
 
 1. **Choose folder.** The page reads the folder and sends the readable files to casefile on this
    computer. Photos and other unreadable files are listed in the report but not sent.
 2. Wait. The page shows how far it has got and roughly how long is left. You can close it; the
-   report keeps building and appears under *Earlier reports*.
+   report keeps building and appears under *Earlier reports*. *Stop* cancels it.
 3. Read the log. Key (major) events are at the top. The importance chips filter the log, and
-   choosing a person in *Who's who* shows only their events. *Show the words* reveals the exact
-   text each event came from. *Download PDF* gives the full report.
+   choosing a person in *Who's who* shows only their events. *Show source*, in small grey under
+   each date, opens the file, page or line, and the exact words an event came from.
+   *Download PDF* gives the full report.
 
-The uploaded copies are deleted as soon as the report is built. Reports are kept in
-`~/.cache/casefile/jobs` until you choose *Delete this report*.
+Built for very large folders: months are drawn only as you scroll to them, long lists (key events,
+files, people, entries to check) come a page at a time with *Show more*, the file and people lists
+have search boxes, and long folder paths are shortened with the full path on hover.
 
-The service listens on this computer only (`127.0.0.1`). It refuses requests addressed to other
-host names, so a website can't reach it by DNS rebinding. It also refuses to create or delete
+Uploaded copies are deleted as soon as a report finishes, fails or is stopped. Reports and the
+model's saved answers are kept in `~/.cache/casefile` until you delete them: *Delete* on any report,
+*Delete all reports and saved data* on the start page, or `casefile clear-cache`.
+
+The service listens on this computer only (`127.0.0.1`). Besides the secret, it refuses requests
+addressed to other host names (so a website can't reach it by DNS rebinding) and refuses to change
 anything unless the request carries a header that other websites can't add.
 
 ### API
 
-The page is a thin client over a small JSON API, which scripts can use too. Calls that change
-anything need the header `X-Casefile: 1`.
+The page is a thin client over a small JSON API, which scripts can use too. Every request needs
+the `casefile_token` cookie (set by opening the printed link, or send it yourself); calls that
+change anything also need the header `X-Casefile: 1`.
 
 | Call | Does |
 |---|---|
@@ -121,43 +145,63 @@ anything need the header `X-Casefile: 1`.
 | `POST /api/jobs` `{"folder": "...", "title": "...", "not_sent": [...]}` | Create a job |
 | `POST /api/jobs/{id}/files` multipart `files` + `paths` | Upload a batch of files with their relative paths |
 | `POST /api/jobs/{id}/start` | Queue it. One job runs at a time |
-| `GET /api/jobs/{id}` | Status, parts done / total, estimated seconds left |
+| `GET /api/jobs/{id}` | Status (`uploading`, `queued`, `running`, `done`, `failed`, `cancelled`), parts done / total, estimated seconds left |
+| `POST /api/jobs/{id}/cancel` | Stop it (a running job stops after the part in progress) |
 | `GET /api/jobs/{id}/report` | The log as JSON: events with `importance`, `kind`, `icon`, people, sources |
 | `GET /api/jobs/{id}/report.pdf` | The PDF |
-| `DELETE /api/jobs/{id}` | Delete the job and its report (never the documents) |
+| `DELETE /api/jobs/{id}` | Delete the job, its report, uploads and its cached model answers (never your documents) |
+| `DELETE /api/data` | Delete every job and the whole cache |
 | `POST /api/jobs/local` `{"path": "..."}` | Desktop app only: read a folder in place |
 
-If casefile restarts, queued and interrupted jobs run again. Finished parts are cached, so little work is repeated.
+If casefile restarts, queued and interrupted jobs run again in the order they were created.
+Finished parts are cached, so little work is repeated.
 
 ### Docker
 
 ```sh
 docker build -t casefile .
 docker run -p 127.0.0.1:8765:8765 -v casefile:/data casefile   # model: Ollama on the host
+docker logs <container>                                         # shows the link to open
 ```
+
+The image includes Tesseract, so scanned PDFs are read.
 
 ## Use it from the command line
 
 ```sh
 casefile report ~/Documents/harbour-road                 # writes ~/Documents/harbour-road.pdf
 casefile report ./case -o report.pdf --title "Smith v Jones"
-casefile report ./case --api openai --url http://localhost:1234 --model qwen2.5-7b-instruct   # LM Studio
+casefile report ./case --api openai --url http://127.0.0.1:1234 --model qwen2.5-7b-instruct   # LM Studio
+casefile clear-cache                                      # delete the model's saved answers
 ```
 
 Runs can be stopped (Ctrl-C) and restarted: each part's result is cached in `~/.cache/casefile/parts`,
-so the rerun continues where it stopped. Changing the model or prompt starts fresh.
+so the rerun continues where it stopped. Changing the model or prompt starts fresh. A part the model
+can't answer (too long, a model error, malformed output) is listed under *Parts the AI could not
+process* and the run carries on; only an unreachable server or a missing model stops it.
 
 | Option | Default | Meaning |
 |---|---|---|
 | `--model` | `qwen2.5:7b` | Model name on the server. Bigger models are slower but miss less. |
 | `--api` | `ollama` | `openai` for any OpenAI-compatible server. |
+| `--url` | `http://127.0.0.1:11434` | Model server address (`:1234` with `--api openai`). |
 | `--context` | `8192` | Context window requested from Ollama. Must fit `--chunk-size` plus the answer. |
-| `--chunk-size` / `--overlap` | `6000` / `600` | Characters per request, and how much neighbouring parts share. |
+| `--chunk-size` / `--overlap` | `6000` / `600` | Characters per request for Latin text (Chinese, Japanese, Korean and Thai parts are made smaller to fit the same token budget), and how much neighbouring parts share. |
 | `--jobs` | `1` | Parallel requests. Only helps if the server allows it: start Ollama with `OLLAMA_NUM_PARALLEL=2` and use `--jobs 2` (14-27% faster on a 16 GB M-series Mac). |
 | `--no-quotes` | off | `report` only: leave the supporting quotes out of the main log (they always stay in *Needs checking*). |
-| `--host` / `--port` | `127.0.0.1` / `8765` | `serve` only. |
+| `--host` / `--port` | `127.0.0.1` / `8765` | `serve` only. `--port 0` picks a free port and prints `casefile: listening on 127.0.0.1:<port>`. |
 
-Reads `.pdf .docx .eml .html .txt .md .csv .json .log` and similar text files. Hidden files are skipped.
+### What it reads
+
+| Kind | Files |
+|---|---|
+| Documents | `.pdf` (including PDFs locked against editing; scanned pages with Tesseract), `.docx`, `.odt`, `.rtf`, `.doc` (converted with macOS `textutil` or `antiword` when available; otherwise listed with a note to save it as `.docx`) |
+| Email | `.eml`, Outlook `.msg`, mailboxes `.mbox`; attachments are read too and cited as `email.eml > attachment.pdf` |
+| Spreadsheets and slides | `.xlsx`, `.pptx` |
+| Text and web | `.txt .md .csv .tsv .json .log .xml .yaml .html .htm`, in UTF-8, UTF-16 or Windows encodings |
+
+Hidden files are skipped. Text hidden from readers in web pages (`hidden`, `display:none` and similar)
+is not sent to the model. A PDF that needs a real password is listed as password protected.
 
 ## The PDF
 
@@ -171,7 +215,9 @@ Reads `.pdf .docx .eml .html .txt .md .csv .json .log` and similar text files. H
 7. **Sources**: every file, how many events it gave, and any it couldn't read.
 
 Text is set in [Atkinson Hyperlegible](https://www.brailleinstitute.org/freefont/) (SIL OFL), a
-typeface designed for readability, in both the PDF and the page.
+typeface designed for readability, in both the PDF and the page. Letters it lacks (Greek, Cyrillic,
+Vietnamese) fall back to the bundled Noto Sans, and Chinese, Japanese, Korean, Thai, Arabic or
+Hebrew to a suitable font already on the computer. If no font has a character, the PDF cover says so.
 
 ## How it works
 
@@ -215,9 +261,14 @@ Joining name forms into one person:
 
 ### Trust
 
-- Every event must carry a word-for-word quote. Code looks for it in the source text; case,
-  whitespace, curly quotes and `...` gaps are allowed for. Events whose quote isn't found go to
-  *Needs checking*, never into the main log.
+- Every event must carry a word-for-word quote of at least 5 words and 25 characters. Code looks
+  for it in the source text; case, whitespace, curly quotes and `...` gaps (each piece at least 3
+  words) are allowed for. Events whose quote isn't found go to *Needs checking*, never into the
+  main log.
+- Documents can't give the model instructions: their text is fenced by a marker derived from the
+  text itself, which a document can't reproduce, and the model is told to treat everything inside
+  it as material to analyse. Two different full names are only merged into one person when they
+  share a surname or a first name (or nickname), so a document can't make the model fuse two people.
 - Importance is the model's judgement against a fixed rubric (see `casefile/taxonomy.py`). When
   copies of an event are merged, it keeps the highest level any copy was given, so a major event
   is never shown as minor because a duplicate was judged differently.
@@ -231,22 +282,54 @@ Joining name forms into one person:
 
 ## Limits
 
-- **Scanned PDFs need OCR first**, e.g. `ocrmypdf in.pdf out.pdf`. They're reported as
-  "no text found".
 - **Speed**: almost all the time goes on the model writing its answer (~15 tokens/s for
   `qwen2.5:7b` on a 16 GB Apple-silicon Mac). That averaged ~70 s per part (35-160 s; a part is up to
   6,000 characters, about 2-3 pages). 1,000 pages is roughly 400 parts, so expect most of a day.
   Run it overnight; it's cached and resumable. A desktop GPU is several times faster.
   Everything after the model is quick: 2,000 files / 28,000 events build and render in under 20 s.
-- Small models miss events and sometimes misread who did what. The quote check catches
-  invented events, not wrong emphasis. A bigger model (`qwen2.5:14b`, `llama3.1:70b`) gives better results.
+- **Accuracy**: small models miss events and sometimes misread who did what. The quote check catches
+  invented events, not wrong emphasis. A bigger model (`qwen2.5:14b`, `llama3.1:70b`) gives better
+  results. Measured results are below.
+- **Right-to-left and complex scripts** (Arabic, Hebrew, Thai, Indic) print in the PDF with the
+  right letters but not joined or reordered; the web page shows them correctly.
+- **Scanned PDFs** need Tesseract (see above); only English OCR data is installed by default
+  (`brew install tesseract-lang` adds other languages).
+
+### Measured accuracy
+
+`evals/` holds three made-up but realistic cases (a damp tenancy, a workplace grievance, a kitchen
+renovation dispute) with 53 hand-labelled events across email with attachments, Word, PDF, Excel,
+RTF, HTML, CSV, a Slack export and a WhatsApp export. Results for `qwen2.5:7b` on a 16 GB M3 Mac
+(casefile 0.2.0):
+
+| Measure | Result |
+|---|---|
+| Labelled events found (recall) | 28 / 53 (53%) |
+| Reported events that match a labelled one (precision) | 28 / 46 (61%) |
+| Dates exactly right, for found events | 28 / 28 (100%) |
+| Importance exactly right | 13 / 28 (46%) |
+| Importance right or one level off | 26 / 28 (93%) |
+| People found | 14 / 16 (88%) |
+| People with the right name label | 14 / 16 (88%) |
+| People split in two or wrongly merged | 0 |
+
+Read it as: with a 7B model, expect roughly half of what happened to be listed, nearly all of it
+correctly dated, and importance usually right or one step off. Precision is understated: several
+"extra" events (e.g. a manager taking someone off overtime) are real events the labels didn't
+include. A bigger model finds more. Rerun with `python -m evals.run --model <model>` to compare.
 
 ## Development
 
 ```sh
-python -m venv .venv && .venv/bin/pip install -e '.[test]'
-.venv/bin/pytest
+python -m venv .venv && .venv/bin/pip install -e '.[test,e2e]'
+.venv/bin/playwright install chromium     # for the browser tests
+.venv/bin/pytest                          # unit, service and browser tests
+python -m evals.run --model qwen2.5:7b    # accuracy against labelled cases (needs Ollama; slow)
 ```
+
+CI runs the tests on Linux, macOS and Windows for every push and pull request. See
+[CONTRIBUTING.md](CONTRIBUTING.md) for the full workflow (prompt changes, the engine lock file,
+releases) and [SECURITY.md](SECURITY.md) to report a vulnerability privately.
 
 ## License
 
@@ -254,5 +337,7 @@ casefile is open source under the [Apache License 2.0](LICENSE). You can use, ch
 including commercially, as long as you keep the licence and the [NOTICE](NOTICE) file.
 
 It bundles [Lucide](https://lucide.dev) icons (ISC) and the
-[Atkinson Hyperlegible](https://www.brailleinstitute.org/freefont/) typeface (SIL Open Font
-License 1.1); their licences are in `casefile/assets/icons/LICENSE` and `casefile/assets/fonts/OFL.txt`.
+[Atkinson Hyperlegible](https://www.brailleinstitute.org/freefont/) and
+[Noto Sans](https://notofonts.github.io/) typefaces (SIL Open Font License 1.1); their licences are
+in `casefile/assets/icons/LICENSE`, `casefile/assets/fonts/OFL.txt` and
+`casefile/assets/fonts/NotoSans-OFL.txt`.

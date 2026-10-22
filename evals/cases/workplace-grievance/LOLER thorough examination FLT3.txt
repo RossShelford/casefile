@@ -1,0 +1,26 @@
+SAFELIFT INSPECTION SERVICES LTD
+REPORT OF THOROUGH EXAMINATION - LIFTING OPERATIONS AND LIFTING EQUIPMENT REGULATIONS 1998 (LOLER) / PUWER
+
+Report no: SL-55821                         Date of examination: 22/05/2023
+Client: Northgate Distribution Ltd, Unit 7 Avonmouth Way, Bristol BS11 9YA
+Equipment: Counterbalance forklift truck, fleet no. FLT 3
+Make/model: Toyota 8FBE18T   Serial: 8FBE18-41907   SWL: 1800 kg
+
+Reason for examination: [ ] Periodic  [X] Following report of defect  [ ] After repair
+
+DEFECTS FOUND
+Item  Description                                         Category
+1     Service brake: hydraulic fluid leak at rear left    A - existing or imminent danger
+      wheel cylinder, brake pedal travel excessive,
+      braking efficiency 31% (min 50%)
+2     Parking brake: does not hold on 1 in 10 gradient    A - existing or imminent danger
+3     Seat belt retractor sticking                        B - within 1 month
+
+STATEMENT: The defects marked A are of immediate danger to persons. The equipment MUST be
+taken out of use immediately and not used until the defects have been remedied.
+Notification of defects of immediate danger has been sent to the enforcing authority (HSE)
+as required by regulation 10(2).
+
+Previous examination: 09/01/2023 (report SL-51002) - no defects recorded.
+Examiner: P. Doyle  (competent person, CPCS A61)
+Signed: P Doyle                      Date: 22/05/2023

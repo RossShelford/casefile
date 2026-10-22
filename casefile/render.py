@@ -7,16 +7,23 @@ weight (bold for major and notable), and a tinted row for major events."""
 
 from __future__ import annotations
 
+import glob
+import os
+import re
+import threading
+import unicodedata
 from collections import Counter
+from contextvars import ContextVar
 from itertools import groupby
 from xml.sax.saxutils import escape
 
 from reportlab.lib.colors import HexColor, white
+from reportlab.lib.fonts import ps2tt
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import mm
 from reportlab.pdfbase import pdfmetrics
-from reportlab.pdfbase.ttfonts import TTFont
+from reportlab.pdfbase.ttfonts import TTFError, TTFont
 from reportlab.platypus import (
     CondPageBreak,
     Flowable,
@@ -33,10 +40,207 @@ from .pipeline import Report
 from .taxonomy import IMPORTANCE, IMPORTANCE_COLOR, IMPORTANCE_LABEL, IMPORTANCE_MEANING, KIND_ICON
 from .timeline import Event, date_label, period_label
 
+_STYLES = (("", "Regular"), ("-Bold", "Bold"), ("-Italic", "Italic"), ("-BoldItalic", "BoldItalic"))
+
+
+def _register_family(name: str, files: dict[str, str]) -> dict[int, int]:
+    """Register four styles as one family; returns the regular face's character map."""
+    for style, _ in _STYLES:
+        pdfmetrics.registerFont(TTFont(f"{name}{style}", files[style]))
+    pdfmetrics.registerFontFamily(name, normal=name, bold=f"{name}-Bold", italic=f"{name}-Italic", boldItalic=f"{name}-BoldItalic")
+    return pdfmetrics.getFont(name).face.charToGlyph
+
+
 # Atkinson Hyperlegible: designed by the Braille Institute for low-vision readability (SIL OFL).
-for _style, _file in (("", "Regular"), ("-Bold", "Bold"), ("-Italic", "Italic"), ("-BoldItalic", "BoldItalic")):
-    pdfmetrics.registerFont(TTFont(f"Body{_style}", str(ASSETS / "fonts" / f"AtkinsonHyperlegible-{_file}.ttf")))
-pdfmetrics.registerFontFamily("Body", normal="Body", bold="Body-Bold", italic="Body-Italic", boldItalic="Body-BoldItalic")
+# It only covers Western European Latin, so Noto Sans (SIL OFL) fills in the rest of Latin,
+# Greek, Cyrillic and Vietnamese. Both are bundled; together they are under 2 MB.
+_FONTS = ASSETS / "fonts"
+_FACES: list[tuple[str, dict[int, int]]] = [
+    ("Body", _register_family("Body", {s: str(_FONTS / f"AtkinsonHyperlegible-{f}.ttf") for s, f in _STYLES})),
+    ("Noto", _register_family("Noto", {s: str(_FONTS / f"NotoSans-{f}.ttf") for s, f in _STYLES})),
+]
+
+
+def _system_fallbacks() -> list[str]:
+    """Fonts already on the computer for scripts we don't bundle (Chinese, Japanese, Korean,
+    Thai, Arabic, Hebrew...). Bundling a CJK font would add 15+ MB, so we borrow one.
+    reportlab reads only TrueType outlines, so CFF fonts (PingFang, Hiragino, Noto CJK) are
+    skipped when they fail to load; the list goes on to one that works."""
+    windir = os.environ.get("WINDIR", r"C:\Windows")
+    paths = [
+        # macOS
+        "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
+        "/System/Library/Fonts/PingFang.ttc",
+        "/System/Library/Fonts/STHeiti Light.ttc",
+        "/System/Library/Fonts/Hiragino Sans GB.ttc",
+        "/System/Library/Fonts/Supplemental/AppleGothic.ttf",
+        "/System/Library/Fonts/Supplemental/Tahoma.ttf",
+        # Windows
+        *(
+            os.path.join(windir, "Fonts", f)
+            for f in ("msyh.ttc", "arialuni.ttf", "YuGothR.ttc", "malgun.ttf", "tahoma.ttf", "Nirmala.ttf")
+        ),
+    ]
+    # Linux: wherever the distribution put them.
+    for pattern in (
+        "NotoSansCJK*.ttc",
+        "DroidSansFallbackFull.ttf",
+        "wqy-microhei.ttc",
+        "wqy-zenhei.ttc",
+        "NotoSans*-Regular.ttf",
+        "DejaVuSans.ttf",
+    ):
+        for root in ("/usr/share/fonts", "/usr/local/share/fonts", os.path.expanduser("~/.local/share/fonts")):
+            paths += sorted(glob.glob(os.path.join(root, "**", pattern), recursive=True))
+    return paths
+
+
+_fallback_lock = threading.Lock()
+_fallback_queue: list[str] | None = None  # candidates not yet tried; None until first needed
+_face_cache: dict[str, str | None] = {}
+
+
+def _load_fallback() -> bool:
+    """Load the next usable system font; False once every candidate has been tried."""
+    global _fallback_queue
+    if _fallback_queue is None:
+        _fallback_queue = _system_fallbacks()
+    while _fallback_queue:
+        path = _fallback_queue.pop(0)
+        if not os.path.isfile(path):
+            continue
+        name = f"Fallback{len(_FACES) - 1}"
+        try:
+            font = TTFont(name, path)  # first face of a .ttc collection
+        except (TTFError, OSError, ValueError, KeyError, IndexError):
+            continue
+        pdfmetrics.registerFont(font)
+        # One style only: bold and italic text in this script shows as regular.
+        pdfmetrics.registerFontFamily(name, normal=name, bold=name, italic=name, boldItalic=name)
+        _FACES.append((name, font.face.charToGlyph))
+        return True
+    return False
+
+
+def _face(ch: str) -> str | None:
+    """The first font that has this character: Atkinson, then Noto Sans, then the system's."""
+    if ch in _face_cache:
+        return _face_cache[ch]
+    with _fallback_lock:
+        code = ord(ch)
+        face = next((name for name, cmap in _FACES if code in cmap), None)
+        while face is None and _load_fallback():
+            name, cmap = _FACES[-1]
+            face = name if code in cmap else None
+        _face_cache[ch] = face
+    return face
+
+
+def covering_font(ch: str) -> str | None:
+    """Registered font name that will draw `ch`, or None if no available font has it."""
+    return _face(ch)
+
+
+# Characters no font could draw while building the current PDF (one set per render call).
+_missing: ContextVar[set[str] | None] = ContextVar("casefile_missing_glyphs", default=None)
+MISSING_GLYPHS_NOTE = "Some characters couldn't be shown: install a font that covers them."
+
+
+def _printable(text: str) -> str:
+    """Control characters become spaces and invisible formatting characters (zero-width
+    joiners, direction marks) are dropped: they have no glyph and would print as boxes."""
+    out = []
+    for ch in text:
+        cat = unicodedata.category(ch)
+        if cat == "Cc":
+            out.append(" ")
+        elif cat not in ("Cf", "Cs"):
+            out.append(ch)
+    return "".join(out)
+
+
+def _word_faces(word: str, missing: set[str] | None) -> list[str]:
+    """Font per character of one word. A word that needs a fallback for some letters is set
+    wholly in that fallback when it has them all ("Nguyễn" in Noto, not "Nguy" in Atkinson
+    and "ễn" in Noto), so a word never mixes two designs."""
+    faces = [_face(ch) for ch in word]
+    for ch, face in zip(word, faces):
+        if face is None and missing is not None:
+            missing.add(ch)
+    found = {f for f in faces if f is not None}
+    if len(found) > 1:
+        order = [name for name, _ in _FACES]
+        widest = max(found, key=order.index)
+        cmap = _FACES[order.index(widest)][1]
+        if all(ord(ch) in cmap for ch, f in zip(word, faces) if f is not None):
+            faces = [widest if f is not None else None for f in faces]
+    return [f or "Body" for f in faces]  # no font: kept, so the reader sees a box there
+
+
+def _runs(text: str) -> list[tuple[str, str]]:
+    """Split text into (font, run) pieces. Spaces stay with the run they're in, so a
+    Cyrillic sentence is one run rather than one per word."""
+    runs: list[tuple[str, str]] = []
+    missing = _missing.get()
+    for piece in re.split(r"(\s+)", _printable(text)):
+        if not piece:
+            continue
+        faces = [runs[-1][0] if runs else "Body"] * len(piece) if piece.isspace() else _word_faces(piece, missing)
+        for ch, face in zip(piece, faces):
+            if runs and runs[-1][0] == face:
+                runs[-1] = (face, runs[-1][1] + ch)
+            else:
+                runs.append((face, ch))
+    return runs
+
+
+def _markup(text: str, font_name: str) -> str:
+    """Escaped Paragraph markup for plain text, switching font for characters the body font
+    lacks. `font_name` is the paragraph's own font: a <font face> tag resets bold and
+    italic, so each switch names the matching style of the fallback family."""
+    _, bold, italic = ps2tt(font_name)
+    suffix = {(0, 0): "", (1, 0): "-Bold", (0, 1): "-Italic", (1, 1): "-BoldItalic"}[(int(bold), int(italic))]
+    out = []
+    for face, run in _runs(text):
+        if face == "Body":
+            out.append(escape(run))
+        else:
+            out.append(f'<font face="{face}{suffix if face == "Noto" else ""}">{escape(run)}</font>')
+    return "".join(out)
+
+
+def _draw(canvas, x: float, y: float, text: str, size: float, right: bool = False) -> None:
+    """canvas.drawString with the same font fallback as paragraphs (for the page footer)."""
+    runs = _runs(text)
+    if right:
+        x -= sum(pdfmetrics.stringWidth(run, face, size) for face, run in runs)
+    for face, run in runs:
+        canvas.setFont(face, size)
+        canvas.drawString(x, y, run)
+        x += pdfmetrics.stringWidth(run, face, size)
+
+
+# Longest text shown per table cell. A model can return a whole page as one "quote"; past
+# a few hundred characters it stops helping the reader, and a table row taller than a page
+# makes reportlab give up on the entire PDF.
+LIMIT = {
+    "summary": 600,
+    "quote": 600,
+    "source": 240,
+    "name": 80,
+    "full_name": 120,
+    "role": 100,
+    "path": 300,
+    "error": 600,
+    "title": 200,
+}
+
+
+def _clip(text: str, limit: int) -> str:
+    text = " ".join(text.split())
+    return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
+
+
 
 BLACK = HexColor(IMPORTANCE_COLOR["standard"])
 GREY = HexColor(IMPORTANCE_COLOR["minor"])
@@ -70,7 +274,8 @@ WIDTH = A4[0] - 30 * mm
 
 
 def _p(text: str, style: str | ParagraphStyle = "cell") -> Paragraph:
-    return Paragraph(escape(text), S[style] if isinstance(style, str) else style)
+    style = S[style] if isinstance(style, str) else style
+    return Paragraph(_markup(text, style.fontName), style)
 
 
 def _plural(n: int, word: str) -> str:
@@ -79,7 +284,10 @@ def _plural(n: int, word: str) -> str:
 
 def _table(rows: list[list], widths: list[float], header: list[str] | None, extra: list | None = None) -> Table:
     data = ([[_p(h, "head") for h in header]] if header else []) + rows
-    t = Table(data, colWidths=widths, repeatRows=1 if header else 0)
+    # Cell text is clipped (LIMIT) so rows stay short. splitInRow is the backstop for a row
+    # still taller than the space left: reportlab first tries whole rows, and only then splits
+    # inside one (leaving at least 36 points, about three lines) instead of failing the PDF.
+    t = Table(data, colWidths=widths, repeatRows=1 if header else 0, splitInRow=36)
     style = [
         ("VALIGN", (0, 0), (-1, -1), "TOP"),
         ("LINEBELOW", (0, 0), (-1, -1), 0.4, RULE),
@@ -97,11 +305,13 @@ def _table(rows: list[list], widths: list[float], header: list[str] | None, extr
 def _event_table(events: list[Event], quotes: bool, date_header: str = "Date") -> Table:
     rows, extra = [], []
     for i, ev in enumerate(events, 1):  # row 0 is the header
-        cell = [_p(ev.summary, SUMMARY[ev.importance])]
+        cell = [_p(_clip(ev.summary, LIMIT["summary"]), SUMMARY[ev.importance])]
         if quotes and ev.quote:
-            cell.append(_p(f"“{ev.quote}”", "quote"))
-        when = date_label(ev.date) if ev.date else (ev.date_as_written or "—")
-        rows.append([importance_icon(KIND_ICON[ev.kind], ev.importance, ICON), _p(when), cell, _p(ev.source, "small")])
+            cell.append(_p(f"“{_clip(ev.quote, LIMIT['quote'])}”", "quote"))
+        when = date_label(ev.date) if ev.date else _clip(ev.date_as_written or "—", LIMIT["name"])
+        rows.append(
+            [importance_icon(KIND_ICON[ev.kind], ev.importance, ICON), _p(when), cell, _p(_clip(ev.source, LIMIT["source"]), "small")]
+        )
         if ev.importance == "major":
             extra.append(("BACKGROUND", (0, i), (-1, i), RED_TINT))
     widths = [ICON + 8, 22 * mm, WIDTH - ICON - 8 - 22 * mm - 44 * mm, 44 * mm]
@@ -126,33 +336,41 @@ class _Anchor(Flowable):
 
 
 def _section(key: str, title: str) -> list:
-    return [PageBreak(), _Anchor(key, title, 0), Paragraph(escape(title), S["h1"])]
+    return [PageBreak(), _Anchor(key, title, 0), _p(title, "h1")]
 
 
 def _link(key: str, text: str) -> Paragraph:
-    return Paragraph(f'<a href="#{key}"><u>{escape(text)}</u></a>', S["cellb"])
+    return Paragraph(f'<a href="#{key}"><u>{_markup(text, S["cellb"].fontName)}</u></a>', S["cellb"])
 
 
 def render(report: Report, out_path: str, *, quotes: bool = True) -> None:
+    token = _missing.set(set())
+    try:
+        _render(report, out_path, quotes)
+    finally:
+        _missing.reset(token)
+
+
+def _render(report: Report, out_path: str, quotes: bool) -> None:
     story: list = []
     dated = [e for e in report.events if e.date]
     counts = Counter(e.importance for e in report.events)
     major = [e for e in report.events if e.importance == "major"]
+    title = _clip(report.title, LIMIT["title"])
 
     # -- Cover ------------------------------------------------------------------
     span = f"{date_label(dated[0].date)} to {date_label(dated[-1].date)}" if dated else "No dated events"
     read = sum(1 for d in report.documents if d.status == "ok")
     story += [
-        Paragraph(escape(report.title), S["title"]),
-        Paragraph(
-            escape(
-                f"{span}. Built {report.generated:%d %b %Y} from {_plural(read, 'file')} in “{report.folder}” "
-                f"by {report.model}, running on this computer."
-            ),
-            S["subtitle"],
+        _p(title, "title"),
+        _p(
+            f"{span}. Built {report.generated:%d %b %Y} from {_plural(read, 'file')} in “{_clip(report.folder, LIMIT['path'])}” "
+            f"by {_clip(report.model, LIMIT['name'])}, running on this computer.",
+            "subtitle",
         ),
-        Paragraph("Importance", S["h2"]),
     ]
+    missing_note_at = len(story)  # filled in once every piece of text has been laid out
+    story.append(Paragraph("Importance", S["h2"]))
     legend = []
     for level in reversed(IMPORTANCE):
         legend.append(
@@ -212,12 +430,12 @@ def render(report: Report, out_path: str, *, quotes: bool = True) -> None:
                 active = first if first == last else f"{first} to {last}"
             rows.append(
                 [
-                    _p(p.label, "cellb"),
-                    _p(p.full_name),
-                    _p("; ".join(p.top_roles())),
+                    _p(_clip(p.label, LIMIT["name"]), "cellb"),
+                    _p(_clip(p.full_name, LIMIT["full_name"])),
+                    _p("; ".join(_clip(role, LIMIT["role"]) for role in p.top_roles())),
                     _p(str(p.events)),
                     _p(active, "small"),
-                    _p(p.first_seen[2], "small"),
+                    _p(_clip(p.first_seen[2], LIMIT["source"]), "small"),
                 ]
             )
         story.append(
@@ -238,7 +456,7 @@ def render(report: Report, out_path: str, *, quotes: bool = True) -> None:
         story.append(_p("Each month: how much happened, how much of it was major, and who was most involved.", "warn"))
         rows = []
         for period, group in months:
-            involved = Counter(p.label for e in group for p in e.actors)
+            involved = Counter(_clip(p.label, LIMIT["name"]) for e in group for p in e.actors)
             n_major = sum(1 for e in group if e.importance == "major")
             rows.append(
                 [
@@ -263,7 +481,7 @@ def render(report: Report, out_path: str, *, quotes: bool = True) -> None:
             story.append(_Anchor(f"y{year}", year, 1))
         story += [
             _Anchor(f"m{period}", period_label(period), 2),
-            Paragraph(escape(period_label(period)), S["h2"]),
+            _p(period_label(period), "h2"),
             _event_table(group, quotes),
         ]
     undated = [e for e in report.events if not e.date]
@@ -286,21 +504,29 @@ def render(report: Report, out_path: str, *, quotes: bool = True) -> None:
     # -- Sources ----------------------------------------------------------------
     story += _section("sources", "Sources")
     rows = [
-        [_p(d.path), _p(str(report.events_per_doc.get(d.path, 0)) if d.status == "ok" else "—"), _p(d.status, "small")]
+        [
+            _p(_clip(d.path, LIMIT["path"])),
+            _p(str(report.events_per_doc.get(d.path, 0)) if d.status == "ok" else "—"),
+            _p(_clip(d.status, LIMIT["path"]), "small"),
+        ]
         for d in sorted(report.documents, key=lambda d: d.path)
     ]
     story.append(_table(rows, [WIDTH - 70 * mm, 16 * mm, 54 * mm], ["File", "Events", "Status"]))
     if report.failures:
         story.append(Paragraph("Parts the AI could not process", S["h2"]))
-        rows = [[_p(src, "small"), _p(err, "small")] for src, err in report.failures]
+        rows = [[_p(_clip(src, LIMIT["source"]), "small"), _p(_clip(err, LIMIT["error"]), "small")] for src, err in report.failures]
         story.append(_table(rows, [60 * mm, WIDTH - 60 * mm], ["Where", "Error"]))
+
+    if _missing.get():
+        story.insert(missing_note_at, _p(MISSING_GLYPHS_NOTE, "warn"))
+
+    footer_title = _clip(report.title, 90)
 
     def footer(canvas, doc):
         canvas.saveState()
-        canvas.setFont("Body", 7.5)
         canvas.setFillColor(META)
-        canvas.drawString(15 * mm, 10 * mm, f"{report.title}. AI-generated: check the sources.")
-        canvas.drawRightString(A4[0] - 15 * mm, 10 * mm, f"Page {doc.page}")
+        _draw(canvas, 15 * mm, 10 * mm, f"{footer_title}. AI-generated: check the sources.", 7.5)
+        _draw(canvas, A4[0] - 15 * mm, 10 * mm, f"Page {doc.page}", 7.5, right=True)
         canvas.restoreState()
 
     def first_page(canvas, doc):

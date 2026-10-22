@@ -1,0 +1,31 @@
+{
+  "description": "Tenant in Bristol vs letting agent and landlord over damp and mould; council enforcement; retaliatory section 21. Formats: OCR-style text, email with attachment, CSV log, letter, HTML report with tables and hidden text, Markdown diary with partial dates.",
+  "events": [
+    {"id": "T01", "date": "2022-01-28", "importance": "notable", "keywords": ["tenancy|agreement", "sign"], "what": "tenancy agreement signed"},
+    {"id": "T02", "date": "2022-02-01", "importance": "standard", "keywords": ["tenancy|term|commenc|start|began|begin", "1,150|rent|12 month|twelve"], "what": "12-month tenancy starts at £1,150 a month"},
+    {"id": "T03", "date": "2022-11", "importance": "notable", "keywords": ["asthma", "worse|deteriorat", "leo|son|child"], "what": "Leo's asthma starts getting markedly worse"},
+    {"id": "T04", "date": "2023-01-10", "importance": "notable", "keywords": ["damp|mould", "report|phone|rang|call", "bedroom|ventilat|inspection"], "what": "Sarah first reports the damp to the agent by phone"},
+    {"id": "T05", "date": "2023-02-02", "importance": "major", "keywords": ["asthma", "emergency|hospital|a&e|nebulis|steroid", "leo|son|child"], "what": "Leo taken to A&E with an acute asthma attack"},
+    {"id": "T06", "date": "2023-03-02", "importance": "standard", "keywords": ["landlord|whitfield|graham", "contractor|approv|pass|forward|fwd"], "what": "agent passes the repair to the landlord for contractor approval"},
+    {"id": "T07", "date": "2023-03-14", "importance": "notable", "keywords": ["mould|damp", "mattress|wardrobe", "repair|chas|third|3rd|photo"], "what": "Sarah chases again: mould has spread, son's mattress thrown away"},
+    {"id": "T08", "date": "2023-03-20", "importance": "notable", "keywords": ["patel|gp|doctor", "letter", "asthma|mould|damp"], "what": "GP letter links Leo's worsening asthma to the mould"},
+    {"id": "T09", "date": "2023-03-21", "importance": "notable", "keywords": ["declin|refus|reject", "quote|dryrite|contractor|1,840", "condensation|lifestyle"], "what": "landlord declines the £1,840 damp repair quote, blames condensation"},
+    {"id": "T10", "date": "2023-03-28", "importance": "minor", "keywords": ["rang|call|phone|voicemail", "tom|price|message|voicemail"], "what": "Sarah rings the agent again, voicemail"},
+    {"id": "T11", "date": "2023-03-29", "importance": "standard", "keywords": ["email|sent|send", "gp|letter|doctor"], "what": "Sarah emails the GP letter to the agent"},
+    {"id": "T12", "date": "2023-04-27", "importance": "notable", "keywords": ["dryrite|contractor", "wash|stain|clean", "root cause|cold bridg|not address"], "what": "contractor does a mould wash only; root cause not addressed"},
+    {"id": "T13", "date": "2023-05-22", "importance": "notable", "keywords": ["council", "complain|form|report"], "what": "Sarah complains to the council"},
+    {"id": "T14", "date": "2023-06-06", "importance": "major", "keywords": ["inspect|visit|environmental|eho|moss|leanne", "category 1|hazard", "mould|damp"], "what": "council inspection finds a Category 1 damp and mould hazard"},
+    {"id": "T15", "date": "2023-06-19", "importance": "major", "keywords": ["improvement notice", "whitfield|landlord|owner|serv"], "what": "council serves an Improvement Notice on the landlord"},
+    {"id": "T16", "date": "2023-07-04", "importance": "major", "keywords": ["section 21|s21|eviction", "notice", "september|leave|out by|possession"], "what": "section 21 eviction notice served, out by 4 September"},
+    {"id": "T17", "date": "2023-09", "importance": "notable", "keywords": ["invalid|retaliat", "section 21|s21|notice|eviction"], "what": "council says the section 21 is invalid (retaliatory eviction)"},
+    {"id": "T18", "date": "2023-10-02", "importance": "notable", "keywords": ["work|extractor|fan|window|dryrite", "start|began|begin|finally"], "what": "proper repair works start"}
+  ],
+  "people": [
+    {"name": "Sarah Kim", "also": ["S. Kim", "Ms Kim", "Ms S. Kim", "Ms Sarah Kim"], "labels": ["Sarah", "Sarah Kim"]},
+    {"name": "Tom Price", "also": ["T Price", "T. Price", "Mr T. Price"], "labels": ["Tom", "Tom Price"]},
+    {"name": "Graham Whitfield", "also": ["G. Whitfield", "G Whitfield", "Mr G. Whitfield", "Mr Whitfield", "Mr Graham Whitfield"], "labels": ["Graham", "Graham Whitfield", "Mr Whitfield", "Whitfield"]},
+    {"name": "Anika Patel", "also": ["Dr Anika Patel", "Dr A. Patel", "A. Patel", "Dr. Anika Patel"], "labels": ["Anika", "Anika Patel", "Dr Patel", "Dr Anika Patel", "Dr. Patel"]},
+    {"name": "Leo Kim", "also": ["Leo"], "labels": ["Leo", "Leo Kim"]},
+    {"name": "Leanne Moss", "also": ["L. Moss"], "labels": ["Leanne", "Leanne Moss"]}
+  ]
+}

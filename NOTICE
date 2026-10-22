@@ -7,5 +7,8 @@ It bundles the following third-party work, each under its own licence:
 
 - Lucide icons (casefile/assets/icons), ISC License, Copyright (c) Lucide Contributors.
   See casefile/assets/icons/LICENSE.
-- Atkinson Hyperlegible typeface (casefile/assets/fonts), SIL Open Font License 1.1,
+- Atkinson Hyperlegible typeface (casefile/assets/fonts/AtkinsonHyperlegible-*.ttf), SIL Open Font License 1.1,
   Copyright 2020 Braille Institute of America, Inc. See casefile/assets/fonts/OFL.txt.
+- Noto Sans typeface (casefile/assets/fonts/NotoSans-*.ttf), SIL Open Font License 1.1,
+  Copyright 2022 The Noto Project Authors (https://github.com/notofonts/latin-greek-cyrillic),
+  a Google project. See casefile/assets/fonts/NotoSans-OFL.txt.

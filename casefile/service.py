@@ -2,7 +2,8 @@
 
 Two ways in:
 - Browser (`casefile serve`): a browser can't hand a server a folder path, so the page sends
-  the files in batches. Uploaded copies are deleted as soon as the report is built.
+  the files in batches. Uploaded copies are deleted as soon as the job ends (done, failed or
+  cancelled).
     POST /api/jobs                  {title, folder, not_sent}   -> job (status "uploading")
     POST /api/jobs/{id}/files       multipart batches of files + their relative paths
     POST /api/jobs/{id}/start       -> queued; one worker runs jobs in order
@@ -11,10 +12,17 @@ Two ways in:
     POST /api/jobs/local            {path, title}               -> queued
 
 Then:
-  GET  /api/jobs/{id}             status and progress
+  GET  /api/jobs/{id}             status (uploading, queued, running, done, failed, cancelled)
+                                  and progress
+  POST /api/jobs/{id}/cancel      stop: at once if waiting, after the part in flight if running
   GET  /api/jobs/{id}/report      the log as JSON;  /report.pdf  the PDF
-  DELETE /api/jobs/{id}           remove the job and its report (never the documents)
+  DELETE /api/jobs/{id}           remove the job, its report, any uploaded copies and the cached
+                                  model results only it used (never the documents)
+  DELETE /api/data                remove every job and the whole cache of model results
   GET  /api/health                is the model ready; POST/GET /api/model/pull downloads it
+
+Every request needs the casefile_token cookie. Browser mode: opening the printed link with
+?token=... sets it.
 """
 
 from __future__ import annotations
@@ -32,7 +40,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path, PurePosixPath
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from starlette.middleware.trustedhost import TrustedHostMiddleware
@@ -41,7 +49,7 @@ from .export import report_to_dict
 from .extract import Extractor, ModelConfig, ModelServerError, check_model, pull_model
 from .icons import ASSETS
 from .ingest import SUPPORTED_EXTS
-from .pipeline import build_report
+from .pipeline import Cancelled, FolderNotFound, build_report
 from .render import render
 from .taxonomy import IMPORTANCE_COLOR, IMPORTANCE_LABEL, IMPORTANCE_MEANING, KIND_ICON
 
@@ -52,10 +60,16 @@ WEB = Path(__file__).parent / "web"
 # or delete jobs. Reads need no header: other sites can't read the responses anyway, and the
 # PDF link must work as a plain download.
 CLIENT_HEADER = "x-casefile"
-# Desktop mode: the app creates a random secret at each launch and sets it as a cookie in its
-# own window. Every request without it is refused, so no other program or website on the
-# computer can use the engine, even though it listens on a local port.
+# A random secret made at each start (by `casefile serve`, or by the desktop app, which sets it
+# as a cookie in its own window). Every request without it is refused, so no other program or
+# user on the computer can use the service, even though it listens on a local port.
 TOKEN_COOKIE = "casefile_token"
+
+
+def _refuse(request: Request, message: str) -> Response:
+    if request.url.path.startswith("/api/"):
+        return JSONResponse({"detail": message}, status_code=403)
+    return PlainTextResponse(message, status_code=403)  # the page itself: shown as-is
 
 
 @dataclass
@@ -63,11 +77,16 @@ class Settings:
     model: ModelConfig
     cache_dir: Path
     jobs_dir: Path
+    token: str  # every request must carry it as the casefile_token cookie
     chunk_size: int = 6000
     overlap: int = 600
     parallel: int = 1
     allowed_hosts: list[str] = field(default_factory=lambda: ["127.0.0.1", "localhost"])
-    desktop_token: str | None = None  # set by the desktop app; enables local-folder jobs
+    desktop: bool = False  # run by the casefile app: enables local-folder jobs
+
+
+# uploading -> queued -> running -> done | failed | cancelled
+FINAL = ("done", "failed", "cancelled")
 
 
 @dataclass
@@ -75,7 +94,7 @@ class Job:
     id: str
     title: str
     folder: str
-    status: str = "uploading"  # uploading -> queued -> running -> done | failed
+    status: str = "uploading"
     created: float = field(default_factory=time.time)
     files: int = 0
     not_sent: list[str] = field(default_factory=list)
@@ -112,12 +131,33 @@ def safe_name(raw: str) -> str:
     return name[:80]
 
 
+def _remove_path(path: Path) -> None:
+    if path.is_dir() and not path.is_symlink():
+        shutil.rmtree(path, ignore_errors=True)
+    else:
+        path.unlink(missing_ok=True)
+
+
 class JobManager:
+    """Jobs, their files on disk, and the one worker thread that runs them.
+
+    Privacy rules: uploaded copies live only while a job waits or runs; they are deleted when it
+    ends, however it ends. Deleting a job also deletes the cached model results for its parts
+    (names, summaries and quotes from the documents) unless another kept job uses them.
+
+    self.lock guards job status changes and the job list, so the worker and the request
+    threads never act on a half-changed job.
+    """
+
     def __init__(self, settings: Settings):
         self.settings = settings
         self.jobs: dict[str, Job] = {}
         self.lock = threading.Lock()
         self.queue: queue.Queue[str] = queue.Queue()
+        self.cache_keys: dict[str, set[str]] = {}  # job id -> parts cache keys its last run used
+        self.stopping: dict[str, str] = {}  # running job id -> "cancel" or "delete"
+        self.active: Extractor | None = None  # the running job's extractor
+        self.cache = Extractor(settings.model, settings.cache_dir)  # only for cache_path()
         settings.jobs_dir.mkdir(parents=True, exist_ok=True)
         self._restore()
         self.worker = threading.Thread(target=self._work, name="casefile-worker", daemon=True)
@@ -138,21 +178,63 @@ class JobManager:
         tmp.write_text(json.dumps(asdict(job)))
         tmp.replace(self.dir(job.id) / "job.json")
 
-    def _restore(self) -> None:
-        """Pick up where a restarted service left off: queued or interrupted jobs run again
-        (finished parts are cached, so little work is repeated)."""
-        for meta in sorted(self.settings.jobs_dir.glob("*/job.json")):
+    def _save_keys(self, job_id: str, keys: set[str]) -> None:
+        (self.dir(job_id) / "parts.json").write_text(json.dumps(sorted(keys)))
+
+    def _load_keys(self, job_id: str) -> set[str]:
+        try:
+            return {k for k in json.loads((self.dir(job_id) / "parts.json").read_text()) if isinstance(k, str)}
+        except (OSError, ValueError, TypeError):
+            return set()
+
+    def _drop_upload(self, job: Job) -> None:
+        """Delete the uploaded copies. (A desktop job reads the user's own folder in place;
+        that is never touched.)"""
+        if not job.source_path:
+            shutil.rmtree(self.dir(job.id) / "upload", ignore_errors=True)
+
+    def _keys_in_use(self) -> set[str]:
+        """Cache keys still needed by kept jobs. Call with self.lock held."""
+        keys: set[str] = set()
+        for job_id in self.jobs:
+            keys |= self.cache_keys.get(job_id, set())
+        if self.active is not None:
+            keys |= set(self.active.keys_used)
+        return keys
+
+    def _remove(self, job_id: str, keys: set[str]) -> None:
+        """Delete a job's folder and the cached parts no other job uses."""
+        for key in keys:
             try:
-                job = Job(**json.loads(meta.read_text()))
-            except (ValueError, TypeError):
-                continue
+                self.cache.cache_path(key).unlink(missing_ok=True)
+            except OSError:
+                log.exception("could not delete cached part %s", key)
+        shutil.rmtree(self.dir(job_id), ignore_errors=True)
+
+    def _restore(self) -> None:
+        """Pick up where a restarted service left off: queued or interrupted jobs run again,
+        in the order they were created (finished parts are cached, so little work is repeated)."""
+        found: list[Job] = []
+        for meta in self.settings.jobs_dir.glob("*/job.json"):
+            try:
+                found.append(Job(**json.loads(meta.read_text())))
+            except (OSError, ValueError, TypeError):
+                log.warning("skipping unreadable job file %s", meta)
+        for job in sorted(found, key=lambda j: j.created):
             if job.status in ("queued", "running"):
                 job.status, job.done, job.current = "queued", 0, ""
                 self.queue.put(job.id)
             elif job.status == "uploading":
                 job.status, job.error = "failed", "The upload was interrupted. Choose the folder again."
+                job.finished = time.time()
+            if job.status in FINAL:
+                self._drop_upload(job)  # also clears copies left by older versions
+            self.cache_keys[job.id] = self._load_keys(job.id)
             self.jobs[job.id] = job
-            self._save(job)
+            try:
+                self._save(job)
+            except OSError:
+                log.exception("could not save job %s", job.id)
 
     # -- lifecycle ---------------------------------------------------------------
 
@@ -162,7 +244,7 @@ class JobManager:
         self.upload_root(job).mkdir(parents=True)
         with self.lock:
             self.jobs[job.id] = job
-        self._save(job)
+            self._save(job)
         return job
 
     def create_local(self, path: str, title: str) -> Job:
@@ -174,7 +256,7 @@ class JobManager:
         self.dir(job.id).mkdir(parents=True)
         with self.lock:
             self.jobs[job.id] = job
-        self._save(job)
+            self._save(job)
         self.queue.put(job.id)
         return job
 
@@ -186,42 +268,96 @@ class JobManager:
 
     def add_file(self, job: Job, rel: PurePosixPath, upload: UploadFile) -> None:
         if job.status != "uploading":
-            raise HTTPException(409, "This job has already started; files can't be added now.")
+            raise HTTPException(409, f"This job is {job.status}; files can't be added now.")
         target = self.upload_root(job).joinpath(*rel.parts)
         target.parent.mkdir(parents=True, exist_ok=True)
         with target.open("wb") as out:
             shutil.copyfileobj(upload.file, out, 1024 * 1024)
         with self.lock:
+            # The job may have been cancelled or deleted while this file was being written;
+            # don't leave the copy behind.
+            if self.jobs.get(job.id) is not job:
+                shutil.rmtree(self.dir(job.id), ignore_errors=True)
+                raise HTTPException(404, "No such job. It may have been deleted.")
+            if job.status != "uploading":
+                self._drop_upload(job)
+                raise HTTPException(409, f"This job is {job.status}; files can't be added now.")
             job.files += 1
 
     def start(self, job: Job) -> None:
-        if job.status != "uploading":
-            raise HTTPException(409, f"This job is already {job.status}.")
-        job.status = "queued"
-        self._save(job)
+        with self.lock:
+            if job.status != "uploading":
+                raise HTTPException(409, f"This job is already {job.status}.")
+            job.status = "queued"
+            self._save(job)
         self.queue.put(job.id)
 
-    def delete(self, job: Job) -> None:
-        if job.status == "running":
-            raise HTTPException(409, "This job is running. Wait for it to finish, then delete it.")
+    def cancel(self, job: Job) -> None:
+        """A waiting job stops at once; a running one when the part in flight is finished."""
         with self.lock:
-            self.jobs.pop(job.id, None)
-        shutil.rmtree(self.dir(job.id), ignore_errors=True)
+            if job.status == "running":
+                self.stopping.setdefault(job.id, "cancel")
+                return
+            if job.status not in ("uploading", "queued"):
+                return  # already finished
+            job.status, job.finished, job.current = "cancelled", time.time(), ""
+            self._save(job)
+            self._drop_upload(job)
+
+    def delete(self, job_id: str) -> None:
+        """Remove a job, its report, its uploaded copies and its unshared cached parts. A running
+        job disappears from the list at once; the worker removes its files when it stops."""
+        with self.lock:
+            job = self.jobs.pop(job_id, None)
+            if job is None:
+                return
+            if job.status == "running":
+                self.stopping[job_id] = "delete"
+                return
+            keys = self.cache_keys.pop(job_id, set()) - self._keys_in_use()
+        self._remove(job_id, keys)
+
+    def delete_all(self) -> None:
+        """Every job and the whole parts cache. A running job is stopped and removed by the worker."""
+        with self.lock:
+            running = {j.id for j in self.jobs.values() if j.status == "running"}
+            for job_id in running:
+                self.stopping[job_id] = "delete"
+            self.jobs.clear()
+            self.cache_keys = {k: v for k, v in self.cache_keys.items() if k in running}
+            # Under the lock, so a job created meanwhile isn't half-deleted.
+            for child in self.settings.jobs_dir.iterdir():
+                if child.name not in running:
+                    _remove_path(child)
+            # Keep the folder itself: the running job's extractor may still write its last part,
+            # which the worker then deletes.
+            for child in self.settings.cache_dir.iterdir():
+                _remove_path(child)
 
     # -- worker ------------------------------------------------------------------
 
     def _work(self) -> None:
+        # One failing job (or a full disk) must never kill the worker: every later job would
+        # sit "queued" forever.
         while True:
             job_id = self.queue.get()
-            job = self.jobs.get(job_id)
-            if job is None or job.status != "queued":
-                continue  # deleted while waiting
-            self._run(job)
+            try:
+                with self.lock:
+                    job = self.jobs.get(job_id)
+                    if job is None or job.status != "queued":
+                        continue  # deleted or cancelled while waiting
+                    job.status, job.started, job.finished, job.error = "running", time.time(), None, ""
+                    job.done, job.total, job.current, job.counts = 0, 0, "", {}
+                    extractor = Extractor(self.settings.model, self.settings.cache_dir)
+                    self.active = extractor
+                    self._save(job)
+                self._run(job, extractor)
+            except Exception:
+                log.exception("worker: job %s", job_id)
 
-    def _run(self, job: Job) -> None:
+    def _run(self, job: Job, extractor: Extractor) -> None:
         s = self.settings
-        job.status, job.started, job.error = "running", time.time(), ""
-        self._save(job)
+        status, error, counts = "failed", "", {}
 
         def progress(done: int, total: int, label: str) -> None:
             job.done, job.total, job.current = done, total, label
@@ -229,31 +365,54 @@ class JobManager:
         try:
             report = build_report(
                 self.upload_root(job),
-                Extractor(s.model, s.cache_dir),
+                extractor,
                 title=job.title,
                 chunk_size=s.chunk_size,
                 overlap=s.overlap,
                 jobs=s.parallel,
                 progress=progress,
                 not_sent=job.not_sent,
+                should_stop=lambda: job.id in self.stopping,
             )
             data = report_to_dict(report)
             (self.dir(job.id) / "report.json").write_text(json.dumps(data))
             render(report, str(self.dir(job.id) / "report.pdf"))
-            job.counts = data["counts"]
-            job.status = "done"
-            if not job.source_path:
-                # Privacy: the uploaded copies are no longer needed once the report exists.
-                # (A desktop job read the user's own folder in place; that is never touched.)
-                shutil.rmtree(self.dir(job.id) / "upload", ignore_errors=True)
+            status, counts = "done", data["counts"]
+        except Cancelled:
+            status = "cancelled"
+        except FolderNotFound as exc:
+            error = str(exc)
         except ModelServerError as exc:
-            job.status, job.error = "failed", f"{exc}. Start the model server, then choose the folder again."
+            error = f"{exc}. Start the model server, then choose the folder again."
         except Exception as exc:  # report the failure to the user instead of a silent dead job
             log.exception("job %s failed", job.id)
-            job.status, job.error = "failed", f"{type(exc).__name__}: {exc}"
-        job.finished = time.time()
-        job.current = ""
-        self._save(job)
+            error = f"{type(exc).__name__}: {exc}"
+        finally:
+            self._finish(job, extractor, status, error, counts)
+
+    def _finish(self, job: Job, extractor: Extractor, status: str, error: str, counts: dict) -> None:
+        # Privacy: uploaded copies are deleted as soon as the job ends, however it ended, and
+        # before the new status is shown.
+        self._drop_upload(job)
+        with self.lock:
+            self.active = None
+            keys = set(extractor.keys_used)
+            if self.stopping.pop(job.id, None) == "delete":
+                keys = (keys | self.cache_keys.pop(job.id, set())) - self._keys_in_use()
+                removed = True
+            else:
+                removed = False
+                job.status, job.error, job.current, job.finished = status, error, "", time.time()
+                if status == "done":
+                    job.counts = counts
+                self.cache_keys[job.id] = keys
+                try:
+                    self._save_keys(job.id, keys)
+                    self._save(job)
+                except OSError:
+                    log.exception("could not save job %s", job.id)
+        if removed:
+            self._remove(job.id, keys)
 
 
 class ModelPull:
@@ -296,21 +455,37 @@ class LocalJob(BaseModel):
 def create_app(settings: Settings) -> FastAPI:
     manager = JobManager(settings)
     puller = ModelPull(settings.model)
-    desktop = settings.desktop_token is not None
+    desktop = settings.desktop
+    expected = settings.token.encode()
     app = FastAPI(title="casefile", docs_url=None, redoc_url=None)
     app.state.manager = manager
-    app.add_middleware(TrustedHostMiddleware, allowed_hosts=settings.allowed_hosts)
+    refusal = (
+        "This casefile engine only answers the casefile app." if desktop
+        else "Open casefile from the link printed when it started."
+    )
 
     @app.middleware("http")
     async def require_client(request: Request, call_next):
-        if desktop:
-            token = request.cookies.get(TOKEN_COOKIE, "")
-            if not hmac.compare_digest(token.encode(), settings.desktop_token.encode()):
-                return JSONResponse({"detail": "This casefile engine only answers the casefile app."}, status_code=403)
+        given = request.query_params.get("token")
+        if given is not None and not desktop:
+            # The link printed by `casefile serve`: swap the key in the address for a cookie
+            # and drop it from the address bar, so it isn't kept in history or bookmarks.
+            if not hmac.compare_digest(given.encode(), expected):
+                return _refuse(request, refusal)
+            rest = request.url.remove_query_params("token").query
+            response = RedirectResponse(request.url.path + (f"?{rest}" if rest else ""), status_code=303)
+            response.set_cookie(TOKEN_COOKIE, settings.token, httponly=True, samesite="strict", path="/")
+            return response
+        if not hmac.compare_digest(request.cookies.get(TOKEN_COOKIE, "").encode(), expected):
+            return _refuse(request, refusal)
         unsafe = request.method not in ("GET", "HEAD", "OPTIONS")
         if unsafe and request.url.path.startswith("/api/") and request.headers.get(CLIENT_HEADER) != "1":
             return JSONResponse({"detail": "Missing X-Casefile header."}, status_code=403)
         return await call_next(request)
+
+    # Added last, so it runs first: a request under a name other than this computer's
+    # (DNS rebinding) is refused before anything else looks at it.
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=settings.allowed_hosts)
 
     @app.get("/", include_in_schema=False)
     def index():
@@ -379,6 +554,12 @@ def create_app(settings: Settings) -> FastAPI:
         manager.start(job)
         return job.public()
 
+    @app.post("/api/jobs/{job_id}/cancel")
+    def cancel(job_id: str):
+        job = manager.get(job_id)
+        manager.cancel(job)
+        return job.public()
+
     @app.get("/api/jobs/{job_id}")
     def status(job_id: str):
         return manager.get(job_id).public()
@@ -402,6 +583,11 @@ def create_app(settings: Settings) -> FastAPI:
 
     @app.delete("/api/jobs/{job_id}", status_code=204)
     def delete(job_id: str):
-        manager.delete(manager.get(job_id))
+        # Always 204, even for an unknown or running job: either way it is gone (or going).
+        manager.delete(job_id)
+
+    @app.delete("/api/data", status_code=204)
+    def delete_data():
+        manager.delete_all()
 
     return app

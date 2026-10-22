@@ -26,9 +26,19 @@ class Report:
     unverified: list[Event]  # quote not found in the source: shown separately, never mixed in
     failures: list[tuple[str, str]] = field(default_factory=list)  # (source, error)
     events_per_doc: dict[str, int] = field(default_factory=dict)
+    cache_keys: set[str] = field(default_factory=set)  # the parts cache entries this report used
+
+
+class Cancelled(Exception):
+    """The caller asked the run to stop. Finished parts stay cached."""
+
+
+class FolderNotFound(Exception):
+    """The folder to read isn't there (moved, renamed, or on a drive that's not connected)."""
 
 
 Progress = Callable[[int, int, str], None]
+ShouldStop = Callable[[], bool]
 
 
 def build_report(
@@ -41,8 +51,19 @@ def build_report(
     jobs: int,
     progress: Progress,
     not_sent: Sequence[str] = (),
+    should_stop: ShouldStop | None = None,
 ) -> Report:
+    # Without this check a missing folder reads as an empty one, giving a "done" report with
+    # no events instead of telling the user the folder has gone.
+    if not folder.is_dir():
+        raise FolderNotFound(
+            f"The folder can't be found: {folder}. It may have been moved or renamed, "
+            "or it's on a drive that isn't connected."
+        )
+    stop = should_stop or (lambda: False)
     docs = scan_folder(folder)
+    if stop():  # reading a large folder can take a while
+        raise Cancelled()
     chunks: list[Chunk] = []
     for i, doc in enumerate(docs):
         if doc.status == "ok":
@@ -52,6 +73,8 @@ def build_report(
         parts[c.doc_index] = parts.get(c.doc_index, 0) + 1
 
     def run(chunk: Chunk) -> dict | ExtractionError:
+        if stop():  # don't send another part once the caller has asked to stop
+            raise Cancelled()
         doc = docs[chunk.doc_index]
         try:
             return extractor.extract(doc.path, chunk.index + 1, parts[chunk.doc_index], chunk.text)
@@ -62,11 +85,13 @@ def build_report(
     progress(0, len(chunks), "")  # the total is known now; the first part can take a minute
     pool = ThreadPoolExecutor(max_workers=max(1, jobs))
     try:
-        # map() keeps order; a ModelServerError (or Ctrl-C) propagates and stops the run.
+        # map() keeps order; a ModelServerError, Cancelled (or Ctrl-C) propagates and stops the run.
         for n, result in enumerate(pool.map(run, chunks), 1):
             results.append(result)
             chunk = chunks[n - 1]
             progress(n, len(chunks), f"{docs[chunk.doc_index].path} ({chunk.index + 1}/{parts[chunk.doc_index]})")
+            if stop():  # checked between parts: the part in flight is finished and cached first
+                raise Cancelled()
     finally:
         # Finished chunks are already cached, so a rerun resumes where this one stopped.
         pool.shutdown(wait=True, cancel_futures=True)
@@ -162,4 +187,5 @@ def build_report(
         unverified=unverified,
         failures=failures,
         events_per_doc=events_per_doc,
+        cache_keys=set(extractor.keys_used),
     )

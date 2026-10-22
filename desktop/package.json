@@ -1,7 +1,7 @@
 {
   "name": "casefile",
   "productName": "casefile",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Choose a folder of documents and get back what happened, most important first. Runs entirely on your computer.",
   "main": "main.js",
   "private": true,
@@ -32,6 +32,15 @@
     "directories": {
       "output": "release",
       "buildResources": "build"
+    },
+    "electronFuses": {
+      "runAsNode": false,
+      "enableNodeOptionsEnvironmentVariable": false,
+      "enableNodeCliInspectArguments": false,
+      "enableEmbeddedAsarIntegrityValidation": true,
+      "onlyLoadAppFromAsar": true,
+      "enableCookieEncryption": false,
+      "resetAdHocDarwinSignature": true
     },
     "mac": {
       "target": [

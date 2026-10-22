@@ -1,0 +1,60 @@
+name: Bug report
+description: Something went wrong, or a report missed or misread something.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. **Never attach real case documents**: they are private. If a file
+        triggers the problem, make a small made-up one that does the same.
+        Security problems go through private reporting instead: see SECURITY.md.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What you did, what you expected, and what happened instead. Paste any error message.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. casefile report ./case --model qwen2.5:7b
+        2. ...
+  - type: dropdown
+    id: how
+    attributes:
+      label: How do you run casefile?
+      options:
+        - Desktop app
+        - casefile serve (browser)
+        - casefile report (command line)
+        - Docker
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: casefile version
+      placeholder: "0.2.0, or a commit"
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: "macOS 15 (Apple silicon), Windows 11, Ubuntu 24.04..."
+    validations:
+      required: true
+  - type: input
+    id: model
+    attributes:
+      label: Model server and model
+      placeholder: "Ollama 0.12, qwen2.5:7b"
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Terminal output, or the desktop app's engine.log. Remove any private content first.
+      render: text

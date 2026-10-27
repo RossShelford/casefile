@@ -47,7 +47,12 @@ def report_to_dict(report: Report) -> dict:
         "events": [_event(e) for e in report.events],
         "unverified": [_event(e) for e in report.unverified],
         "sources": [
-            {"path": d.path, "status": d.status, "events": report.events_per_doc.get(d.path, 0)}
+            {
+                "path": d.path,
+                "status": d.status,
+                "events": report.events_per_doc.get(d.path, 0),
+                "repeats_removed": d.repeats_removed,
+            }
             for d in sorted(report.documents, key=lambda d: d.path)
         ],
         "failures": [{"where": w, "error": e} for w, e in report.failures],

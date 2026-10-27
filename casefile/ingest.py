@@ -18,7 +18,9 @@ import email
 import email.message
 import email.policy
 import email.utils
+import hashlib
 import io
+import json
 import mailbox
 import mimetypes
 import os
@@ -26,11 +28,13 @@ import re
 import shutil
 import subprocess
 import tempfile
+import threading
 import zipfile
+from collections import Counter
 from dataclasses import dataclass, field
 from html.parser import HTMLParser
 from pathlib import Path
-from typing import Iterator
+from typing import Callable, Iterator
 from xml.etree import ElementTree
 
 TEXT_EXTS = {".txt", ".md", ".markdown", ".log", ".csv", ".tsv", ".json", ".xml", ".yaml", ".yml"}
@@ -48,8 +52,17 @@ PDF_PASSWORD = "password protected: remove the password to read it"
 OLD_DOC = "old Word .doc: open it and save as .docx to read it"
 # An attachment inside an attachment inside ... stops somewhere; real mail rarely nests past 2.
 MAX_NESTING = 5
+# Bump when PDF reading changes (text extraction, OCR, repeated-line removal): cached
+# extracted text is keyed on it, so old entries are ignored rather than reused.
+EXTRACT_VERSION = "1"
+# A line this long that recurs this often in one PDF is a page header, footer or a quoted
+# copy of an earlier email: it is kept the first time and dropped after that.
+REPEAT_MIN_CHARS = 20
+REPEAT_MIN_COUNT = 3
 
 Source = Path | bytes  # a file on disk, or the bytes of an attachment
+Progress = Callable[[str], None]  # what is being read right now, for a progress display
+Remember = Callable[[str], None]  # a cache key this run used, so the caller can delete it later
 
 
 @dataclass
@@ -58,6 +71,7 @@ class Document:
     text: str = ""
     page_starts: list[int] | None = None  # PDF only: text offset where each page begins
     status: str = "ok"
+    repeats_removed: int = 0  # PDF only: lines dropped as repeated headers, footers or quoted copies
     _line_starts: list[int] = field(default_factory=list, repr=False)
 
     def location(self, offset: int) -> str:
@@ -77,24 +91,36 @@ class Chunk:
     text: str
 
 
-def scan_folder(root: Path) -> list[Document]:
-    """Read every file under root (skipping hidden files/dirs), in stable path order."""
+def scan_folder(
+    root: Path, cache_dir: Path | None = None, remember: Remember | None = None, progress: Progress | None = None
+) -> list[Document]:
+    """Read every file under root (skipping hidden files/dirs), in stable path order.
+
+    With cache_dir, the text read out of each PDF (OCR included) is kept there, keyed on the
+    file's bytes, so a rerun doesn't read or OCR it again; every key used is passed to remember."""
     docs = []
     for path in sorted(p for p in root.rglob("*") if p.is_file()):
         rel = path.relative_to(root)
         if any(part.startswith(".") for part in rel.parts):
             continue
-        docs.extend(read_document(path, rel.as_posix()))
+        if progress:
+            progress(f"Reading {rel.as_posix()}")
+        docs.extend(read_document(path, rel.as_posix(), cache_dir, remember, progress))
     return docs
 
 
-def read_document(path: Path, rel: str) -> list[Document]:
+def read_document(
+    path: Path, rel: str, cache_dir: Path | None = None, remember: Remember | None = None, progress: Progress | None = None
+) -> list[Document]:
     """Read one file. Most files give one Document; mail containers give one per
     message and attachment, the container's own text first."""
-    return _read(path, Path(rel).suffix.lower(), rel, 0)
+    return _read(path, Path(rel).suffix.lower(), rel, 0, cache_dir, remember, progress)
 
 
-def _read(src: Source, ext: str, rel: str, depth: int) -> list[Document]:
+def _read(
+    src: Source, ext: str, rel: str, depth: int,
+    cache_dir: Path | None = None, remember: Remember | None = None, progress: Progress | None = None,
+) -> list[Document]:
     if ext not in SUPPORTED_EXTS:
         return [Document(rel, status=SKIPPED)]
     try:
@@ -106,7 +132,7 @@ def _read(src: Source, ext: str, rel: str, depth: int) -> list[Document]:
         if ext == ".msg":
             return _msg_docs(_ole_message(_bytes(src)), rel, depth)
         if ext == ".pdf":
-            doc = _read_pdf(_bytes(src), rel)
+            doc = _read_pdf_cached(_bytes(src), rel, cache_dir, remember, progress)
         elif ext == ".doc":
             doc = _read_doc(src, rel)
         else:
@@ -233,7 +259,34 @@ def _decode(data: bytes) -> str:
 # ---------------------------------------------------------------------------- PDF
 
 
-def _read_pdf(data: bytes, rel: str) -> Document:
+def _read_pdf_cached(
+    data: bytes, rel: str, cache_dir: Path | None, remember: Remember | None, progress: Progress | None
+) -> Document:
+    """_read_pdf, remembered on disk: reading a scanned PDF costs about a second a page, so
+    the result is kept under a hash of the file's bytes (and of how it was read)."""
+    if cache_dir is None:
+        return _read_pdf(data, rel, progress)
+    key = "doc-" + hashlib.sha256(
+        b"\0".join((EXTRACT_VERSION.encode(), b"ocr" if _tesseract() else b"", data))
+    ).hexdigest()
+    cached = cache_dir / f"{key}.json"
+    try:
+        saved = json.loads(cached.read_text())
+        doc = Document(rel, saved["text"], saved["page_starts"], saved["status"], saved["repeats_removed"])
+    except (OSError, ValueError, KeyError, TypeError):
+        doc = _read_pdf(data, rel, progress)
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        tmp = cache_dir / f"{key}.{threading.get_ident()}.tmp"
+        tmp.write_text(json.dumps(
+            {"text": doc.text, "page_starts": doc.page_starts, "status": doc.status, "repeats_removed": doc.repeats_removed}
+        ))
+        tmp.replace(cached)  # atomic: an interrupted run never leaves a half-written file
+    if remember:
+        remember(key)
+    return doc
+
+
+def _read_pdf(data: bytes, rel: str, progress: Progress | None = None) -> Document:
     from pypdf import PdfReader
 
     reader = PdfReader(io.BytesIO(data))
@@ -247,21 +300,65 @@ def _read_pdf(data: bytes, rel: str) -> Document:
     tesseract = _tesseract()
     if blank and tesseract:
         # Scanned pages carry only an image; OCR just those so typed pages keep exact text.
+        def on_page(done: int) -> None:
+            if progress:
+                progress(f"Reading {rel}: scanned page {done} of {len(blank)}")
+
         try:
-            ocr = _ocr_pages(data, blank, tesseract)
+            ocr = _ocr_pages(data, blank, tesseract, on_page)
         except Exception:  # OCR is a bonus: a failure must not lose the typed pages
             ocr = {}
         for i, words in ocr.items():
             texts[i] = words.strip()
+    texts, repeats = _drop_repeated_lines(texts)
     parts, starts, offset = [], [], 0
     for page_text in texts:
         starts.append(offset)
         parts.append(page_text + "\n\n")
         offset += len(page_text) + 2
-    doc = Document(rel, "".join(parts), page_starts=starts)
+    doc = Document(rel, "".join(parts), page_starts=starts, repeats_removed=repeats)
     if not doc.text.strip():
         doc.status = NO_PDF_TEXT if tesseract else NO_PDF_TEXT_NO_OCR
     return doc
+
+
+_QUOTE_PREFIX = re.compile(r"^(?:\s*>)+\s?")
+
+
+def _drop_repeated_lines(pages: list[str]) -> tuple[list[str], int]:
+    """Keep the first copy of any line that recurs REPEAT_MIN_COUNT times or more in the
+    document and drop the rest: page headers and footers, and the quoted copies of earlier
+    messages that every reply in a printed email chain carries. The model then reads each
+    passage once, and the first copy keeps its date and context. Only long lines count,
+    compared without case, surrounding space or '>' quote marks, so short lines that
+    legitimately recur (dates, amounts, names) are left alone."""
+    counts: Counter[str] = Counter()
+    for page in pages:
+        for line in page.split("\n"):
+            n = _repeat_key(line)
+            if n:
+                counts[n] += 1
+    if not any(c >= REPEAT_MIN_COUNT for c in counts.values()):
+        return pages, 0
+    seen: set[str] = set()
+    out, dropped = [], 0
+    for page in pages:
+        kept = []
+        for line in page.split("\n"):
+            n = _repeat_key(line)
+            if n and counts[n] >= REPEAT_MIN_COUNT:
+                if n in seen:
+                    dropped += 1
+                    continue
+                seen.add(n)
+            kept.append(line)
+        out.append("\n".join(kept).strip())
+    return out, dropped
+
+
+def _repeat_key(line: str) -> str:
+    n = " ".join(_QUOTE_PREFIX.sub("", line).split()).casefold()
+    return n if len(n) >= REPEAT_MIN_CHARS else ""
 
 
 _BIN_DIRS = ("/opt/homebrew/bin", "/usr/local/bin", "/usr/bin")
@@ -282,15 +379,16 @@ _OCR_MAX_SIDE = 7000  # pixels; keeps a poster-sized page from needing gigabytes
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)  # Windows: no console flash
 
 
-def _ocr_pages(data: bytes, pages: list[int], tesseract: str) -> dict[int, str]:
-    """Render each listed page to a grayscale image and read it with the tesseract CLI."""
+def _ocr_pages(data: bytes, pages: list[int], tesseract: str, on_page: Callable[[int], None] | None = None) -> dict[int, str]:
+    """Render each listed page to a grayscale image and read it with the tesseract CLI.
+    on_page(n) is called after each page, n pages done."""
     import pypdfium2 as pdfium
 
     out: dict[int, str] = {}
     pdf = pdfium.PdfDocument(data)
     try:
         with tempfile.TemporaryDirectory(prefix="casefile-ocr-") as tmp:
-            for i in pages:
+            for done, i in enumerate(pages, 1):
                 page = pdf[i]
                 width, height = page.get_size()
                 scale = min(_OCR_DPI / 72, _OCR_MAX_SIDE / max(width, height, 1))
@@ -311,6 +409,8 @@ def _ocr_pages(data: bytes, pages: list[int], tesseract: str) -> dict[int, str]:
                 image.unlink()
                 bitmap.close()
                 page.close()
+                if on_page:
+                    on_page(done)
     finally:
         pdf.close()
     return out

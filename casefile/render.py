@@ -144,6 +144,17 @@ def covering_font(ch: str) -> str | None:
 # Characters no font could draw while building the current PDF (one set per render call).
 _missing: ContextVar[set[str] | None] = ContextVar("casefile_missing_glyphs", default=None)
 MISSING_GLYPHS_NOTE = "Some characters couldn't be shown: install a font that covers them."
+FAILED_PARTS_NOTE = (
+    "These parts were skipped and will stay skipped on a rerun. To try them again, delete this "
+    "report and choose the folder again (command line: casefile clear-cache)."
+)
+
+
+def _status(doc) -> str:
+    """'ok' plus how many repeated lines (headers, footers, quoted copies) were read once."""
+    if doc.status == "ok" and doc.repeats_removed:
+        return f"ok, {doc.repeats_removed:,} repeated lines read once"
+    return doc.status
 
 
 def _printable(text: str) -> str:
@@ -507,13 +518,14 @@ def _render(report: Report, out_path: str, quotes: bool) -> None:
         [
             _p(_clip(d.path, LIMIT["path"])),
             _p(str(report.events_per_doc.get(d.path, 0)) if d.status == "ok" else "—"),
-            _p(_clip(d.status, LIMIT["path"]), "small"),
+            _p(_clip(_status(d), LIMIT["path"]), "small"),
         ]
         for d in sorted(report.documents, key=lambda d: d.path)
     ]
     story.append(_table(rows, [WIDTH - 70 * mm, 16 * mm, 54 * mm], ["File", "Events", "Status"]))
     if report.failures:
         story.append(Paragraph("Parts the AI could not process", S["h2"]))
+        story.append(_p(FAILED_PARTS_NOTE, "small"))
         rows = [[_p(_clip(src, LIMIT["source"]), "small"), _p(_clip(err, LIMIT["error"]), "small")] for src, err in report.failures]
         story.append(_table(rows, [60 * mm, WIDTH - 60 * mm], ["Where", "Error"]))
 

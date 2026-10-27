@@ -44,10 +44,13 @@ does when you open the Ollama app yourself; it frees the model's memory after 5 
 **Scanned PDFs** (photos of pages, with no text layer) are read with OCR if
 [Tesseract](https://tesseract-ocr.github.io/tessdoc/Installation.html) is installed
 (`brew install tesseract` on a Mac). Without it they're listed under *Sources* as needing OCR.
+OCR takes about a second a page; the page shows which page it is on, and the text read out of
+each PDF is saved with the report so a rerun doesn't read it again.
 
 The folder is read where it is: nothing is copied or uploaded, and casefile never changes it.
-Reports, and the model's saved answers for their documents, are kept in casefile's own data folder
-until you choose *Delete* on that report, or *Delete all reports and saved data* on the start page.
+Reports, the text read out of their PDFs, and the model's saved answers for their documents are
+kept in casefile's own data folder until you choose *Delete* on that report, or *Delete all reports
+and saved data* on the start page.
 
 **The app isn't code-signed yet**, so the first launch needs one extra step:
 
@@ -124,9 +127,10 @@ Built for very large folders: months are drawn only as you scroll to them, long 
 files, people, entries to check) come a page at a time with *Show more*, the file and people lists
 have search boxes, and long folder paths are shortened with the full path on hover.
 
-Uploaded copies are deleted as soon as a report finishes, fails or is stopped. Reports and the
-model's saved answers are kept in `~/.cache/casefile` until you delete them: *Delete* on any report,
-*Delete all reports and saved data* on the start page, or `casefile clear-cache`.
+Uploaded copies are deleted as soon as a report finishes, fails or is stopped. Reports, the text
+read out of their PDFs and the model's saved answers are kept in `~/.cache/casefile` until you
+delete them: *Delete* on any report, *Delete all reports and saved data* on the start page, or
+`casefile clear-cache`.
 
 The service listens on this computer only (`127.0.0.1`). Besides the secret, it refuses requests
 addressed to other host names (so a website can't reach it by DNS rebinding) and refuses to change
@@ -175,10 +179,15 @@ casefile report ./case --api openai --url http://127.0.0.1:1234 --model qwen2.5-
 casefile clear-cache                                      # delete the model's saved answers
 ```
 
-Runs can be stopped (Ctrl-C) and restarted: each part's result is cached in `~/.cache/casefile/parts`,
-so the rerun continues where it stopped. Changing the model or prompt starts fresh. A part the model
-can't answer (too long, a model error, malformed output) is listed under *Parts the AI could not
-process* and the run carries on; only an unreachable server or a missing model stops it.
+Runs can be stopped (Ctrl-C) and restarted: the text read out of each PDF and each part's answer
+are cached in `~/.cache/casefile/parts`, so the rerun continues where it stopped. The answer is
+keyed on the part's text alone, so renaming or moving a file, or the same letter turning up in two
+folders, costs nothing; changing the model or prompt starts fresh. A part the model can't answer
+(a model error, a timeout, malformed output, or an answer that never stops and is cut off at 3,000
+tokens) is listed under *Parts the AI could not process* and the run carries on; only an
+unreachable server or a missing model stops it. Failures that would repeat (malformed output
+twice, a cut-off answer, a request the server refused) are remembered so a rerun doesn't pay for
+them again; `casefile clear-cache` (or deleting the report in the app) forgets them.
 
 | Option | Default | Meaning |
 |---|---|---|
@@ -274,6 +283,11 @@ Joining name forms into one person:
   is never shown as minor because a duplicate was judged differently.
 - Dates are kept only when unambiguous. `03/04/2023` (March or April?) is shown as written
   under *Undated* instead of being guessed.
+- In a PDF, a long line that appears three times or more (a page header or footer, or the
+  quoted copy of an earlier email that every reply in a printed chain carries) is read once, at
+  its first appearance, so the model sees each passage with its date and context once. *Sources*
+  says how many lines each file had read this way. Short lines (dates, amounts, names) are never
+  touched, and nothing is removed across files.
 - Duplicates (overlapping parts, reply chains that quote earlier emails) are removed only when
   the quoted evidence matches. "Sarah paid Tom" and "Sarah phoned Tom" on the same day stay two
   entries: a repeated line is better than a lost one.

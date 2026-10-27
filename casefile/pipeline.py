@@ -61,7 +61,8 @@ def build_report(
             "or it's on a drive that isn't connected."
         )
     stop = should_stop or (lambda: False)
-    docs = scan_folder(folder)
+    # Reading (OCR above all) can take minutes: say what is being read, with no part count yet.
+    docs = scan_folder(folder, extractor.cache_dir, extractor.remember, lambda label: progress(0, 0, label))
     if stop():  # reading a large folder can take a while
         raise Cancelled()
     chunks: list[Chunk] = []
@@ -77,7 +78,7 @@ def build_report(
             raise Cancelled()
         doc = docs[chunk.doc_index]
         try:
-            return extractor.extract(doc.path, chunk.index + 1, parts[chunk.doc_index], chunk.text)
+            return extractor.extract(chunk.text)
         except ExtractionError as exc:
             return exc
 

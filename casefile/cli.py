@@ -102,6 +102,10 @@ def _report(ap: argparse.ArgumentParser, args: argparse.Namespace) -> int:
 
     def progress(done: int, total: int, label: str) -> None:
         if done == 0:
+            # Still reading the files (no part count yet): show what is being read.
+            if label and interactive:
+                sys.stderr.write("\r\033[K" + label[:160])
+                sys.stderr.flush()
             return
         elapsed = time.monotonic() - started
         eta = elapsed / done * (total - done)

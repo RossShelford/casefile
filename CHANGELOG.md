@@ -36,6 +36,8 @@ review findings fixed (S = security, C = correctness, I = other improvements).
   with a pinned PyInstaller, and each installer gets a signed build-provenance attestation and a
   SHA-256 checksum. [S9]
 - The background worker can no longer die silently and leave later jobs queued forever. [S10]
+- The text read out of each PDF (OCR included) is cached alongside the model's answers, keyed on
+  the file's bytes, and deleted with the report like them.
 
 ### Fixed
 
@@ -66,6 +68,22 @@ review findings fixed (S = security, C = correctness, I = other improvements).
   "P. Doyle" labelled "P"); professional letters such as MRICS are not read as a surname; and
   organisations ("Hollis & Sons Ltd") are not listed as people. Found by the new evaluation:
   correct name labels went from 56% to 88%.
+- An answer the model never finishes is cut off at 3,000 tokens and the part recorded as
+  unread, instead of running to the 10-minute timeout, being retried for another 10 minutes,
+  and doing the same again on every rerun. Failures that would repeat (a cut-off answer,
+  malformed output twice, a request the server refused) are remembered, so a rerun skips them;
+  deleting the report or `casefile clear-cache` forgets them. Timeouts and server errors are not
+  remembered: they get another chance.
+- Scanned PDFs are OCR'd once: the text read out of each PDF is kept with the report, so a rerun
+  or a stopped-and-restarted report doesn't spend a second a page reading it again. While it is
+  being read, the page says which file and scanned page it is on instead of looking frozen.
+- The model's cached answer is keyed on the part's text alone, not its file name and part
+  number, so renaming or moving a file, or re-paginating a PDF, no longer discards every answer
+  for it.
+- Page headers and footers, and the quoted copies of earlier emails in a printed chain, are read
+  once: a long line that recurs three times or more in a PDF is kept at its first appearance.
+  *Sources* shows how many lines each file had read this way.
+- The web page lists the parts the AI could not read, as the PDF already did.
 
 ### Changed (web page and app)
 

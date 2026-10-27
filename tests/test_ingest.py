@@ -124,7 +124,7 @@ def test_tesseract_found_outside_path(monkeypatch, tmp_path):
 def test_ocr_reads_only_the_scanned_pages_and_keeps_page_numbers(tmp_path, monkeypatch):
     calls = []
     real = ingest._ocr_pages
-    monkeypatch.setattr(ingest, "_ocr_pages", lambda data, pages, exe: calls.append(pages) or real(data, pages, exe))
+    monkeypatch.setattr(ingest, "_ocr_pages", lambda data, pages, exe, on_page=None: calls.append(pages) or real(data, pages, exe))
     path = tmp_path / "mixed.pdf"
     path.write_bytes(
         _scanned_pdf_bytes([("Typed cover letter", False), ("NOTICE TO QUIT", True), ("Typed last page", False)])
@@ -135,6 +135,64 @@ def test_ocr_reads_only_the_scanned_pages_and_keeps_page_numbers(tmp_path, monke
     assert "NOTICE TO QUIT" in doc.text.upper()
     assert doc.location(doc.text.upper().index("NOTICE")) == "p. 2"
     assert doc.location(doc.text.index("Typed last page")) == "p. 3"
+
+
+def test_pdf_text_is_cached_by_content_and_the_key_is_reported(tmp_path, monkeypatch):
+    reads = []
+    real = ingest._read_pdf
+    monkeypatch.setattr(ingest, "_read_pdf", lambda data, rel, progress=None: reads.append(rel) or real(data, rel, progress))
+    folder, cache = tmp_path / "docs", tmp_path / "cache"
+    folder.mkdir()
+    (folder / "a.pdf").write_bytes(_pdf_bytes(["Notice served on 5 April", "Second page"]))
+    keys: set[str] = set()
+
+    first = scan_folder(folder, cache, keys.add)
+    (folder / "a.pdf").rename(folder / "renamed.pdf")  # same bytes under another name
+    second = scan_folder(folder, cache, keys.add)
+    assert reads == ["a.pdf"]  # read once; the rename hit the cache
+    assert second[0].path == "renamed.pdf" and second[0].text == first[0].text
+    assert second[0].page_starts == first[0].page_starts and second[0].status == "ok"
+    (key,) = keys
+    assert key.startswith("doc-") and (cache / f"{key}.json").exists()
+
+    (folder / "renamed.pdf").write_bytes(_pdf_bytes(["Notice served on 5 April", "Changed page"]))
+    assert "Changed page" in scan_folder(folder, cache, keys.add)[0].text
+    assert reads == ["a.pdf", "renamed.pdf"] and len(keys) == 2
+
+
+def test_pdf_reading_reports_progress_without_a_cache(tmp_path):
+    (tmp_path / "a.pdf").write_bytes(_pdf_bytes(["Hello"]))
+    seen = []
+    docs = scan_folder(tmp_path, progress=seen.append)
+    assert docs[0].status == "ok" and seen == ["Reading a.pdf"]
+
+
+def test_repeated_pdf_lines_are_read_once_and_counted():
+    footer = "Harbour Lettings Ltd - registered in England 01234567"
+    quoted = "> Please confirm how you intend to proceed with the repairs."
+    pages = [
+        f"Dear Sam,\nPlease confirm how you intend to proceed with the repairs.\n{footer}",
+        f"Reply one\n{quoted}\n{footer}",
+        f"Reply two\n{quoted}\n{footer}",
+        f"5 April\n£800\nLast page\n{footer}",
+    ]
+    kept, dropped = ingest._drop_repeated_lines(pages)
+    assert dropped == 5  # three footers, two quoted copies
+    assert kept[0] == pages[0]  # first copies stay, with their context
+    assert kept[1:] == ["Reply one", "Reply two", "5 April\n£800\nLast page"]
+    # Short lines recur legitimately (dates, amounts) and are never touched.
+    assert ingest._drop_repeated_lines(["5 April", "5 April", "5 April"]) == (["5 April", "5 April", "5 April"], 0)
+    # Two copies are not a pattern: both stay.
+    assert ingest._drop_repeated_lines([footer, footer]) == ([footer, footer], 0)
+
+
+def test_repeats_are_removed_from_a_pdf_and_pages_still_cite(tmp_path):
+    footer = "Confidential - Harbour Road file - page footer"
+    path = tmp_path / "chain.pdf"
+    path.write_bytes(_pdf_bytes([f"First page words\n{footer}", f"Second page words\n{footer}", f"Third page words\n{footer}"]))
+    doc = _one(path)
+    assert doc.repeats_removed == 2 and doc.text.count(footer) == 1
+    assert doc.location(doc.text.index("Third page")) == "p. 3"
 
 
 # ------------------------------------------------------------------ Office formats

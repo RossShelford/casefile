@@ -403,7 +403,8 @@ async function openJob(id) {
       heading.textContent = `${j.done.toLocaleString()} of ${plural(j.total, "part")} read. ${aboutTime(j.eta_seconds)}`;
     }
     bar.style.width = j.total ? `${(100 * j.done) / j.total}%` : "0";
-    if (!current.textContent.startsWith("It couldn't")) current.textContent = j.current ? `Last read: ${j.current}` : "";
+    // While the files are still being read there is no part count: j.current says what is being read.
+    if (!current.textContent.startsWith("It couldn't")) current.textContent = j.current ? (j.total ? `Last read: ${j.current}` : j.current) : "";
   };
   update(job);
   const mine = setInterval(async () => {
@@ -602,7 +603,9 @@ async function showReport(job) {
   const unread = rep.sources.filter((s) => s.status !== "ok");
   const sourceRow = (s) => el("li", {},
     el("span", { class: "path", title: s.path }, s.path),
-    el("span", { class: "status" }, s.status === "ok" ? plural(s.events, "event") : s.status));
+    el("span", { class: "status" }, s.status === "ok"
+      ? plural(s.events, "event") + (s.repeats_removed ? `, ${s.repeats_removed.toLocaleString()} repeated lines read once` : "")
+      : s.status));
   const filesBox = el("div");
   let onlyUnread = false;
   let fileQuery = "";
@@ -632,6 +635,14 @@ async function showReport(job) {
     if (checking.open && checking.children.length === 2) checking.append(pagedList(rep.unverified, eventRow, { page: 100, noun: "more" }));
   });
 
+  const failedParts = rep.failures.length ? el("details", {},
+    el("summary", {}, `Parts the AI could not read (${rep.failures.length.toLocaleString()})`),
+    el("p", { class: "note" }, "These parts were skipped and stay skipped on a rerun. To try them again, delete this report and choose the folder again."),
+    el("ul", { class: "sources" }, ...rep.failures.map((f) => el("li", {},
+      el("span", { class: "path", title: f.where }, f.where),
+      el("span", { class: "status" }, f.error)))))
+    : null;
+
   const period = rep.period ? `${rep.events.find((e) => e.date).date_label} to ${[...rep.events].reverse().find((e) => e.date).date_label}. ` : "";
   const filesRead = rep.sources.length - unread.length;
 
@@ -655,6 +666,7 @@ async function showReport(job) {
       log,
       empty,
       checking,
+      failedParts,
       files,
       el("p", { class: "note" },
         `Written by ${rep.model}, an AI model running on this computer. It can miss or misread things: check the source before relying on an entry. `,

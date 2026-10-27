@@ -392,6 +392,28 @@ def test_deleting_a_job_removes_only_the_cached_parts_no_other_job_uses(tmp_path
     assert _cached(settings) == set()
 
 
+def test_deleting_a_job_removes_the_text_read_from_its_pdfs(tmp_path, model_url):
+    # The extracted text (OCR included) is cached so a rerun is quick; it holds the
+    # documents' words, so it goes with the report.
+    from reportlab.pdfgen import canvas
+
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf)
+    c.drawString(72, 700, "Robert Hale served notice to end the tenancy")
+    c.showPage()
+    c.save()
+    settings = _settings(tmp_path, model_url)
+    client = _client(settings)
+    job = _job(client, {"notice.pdf": buf.getvalue()})
+    assert _wait(client, job)["status"] == "done"
+    assert client.get(f"/api/jobs/{job}/report").json()["counts"]["major"] == 1
+    cached = _parts(settings, job)
+    assert any(name.startswith("doc-") for name in cached) and _cached(settings) == cached
+
+    assert client.delete(f"/api/jobs/{job}", headers=H).status_code == 204
+    assert _cached(settings) == set()
+
+
 def test_delete_all_data_removes_every_job_and_the_whole_cache(tmp_path, gated):
     url, model = gated
     model.gate.set()
